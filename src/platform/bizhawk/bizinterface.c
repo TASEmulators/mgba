@@ -354,6 +354,11 @@ EXP void BizGetMemoryAreas(bizctx* ctx, struct MemoryAreas* dst)
 	dst->oam = ctx->core->getMemoryBlock(ctx->core, REGION_OAM, &sizeOut);
 	dst->rom = ctx->core->getMemoryBlock(ctx->core, REGION_CART0, &sizeOut);
 	dst->sram = ctx->core->getMemoryBlock(ctx->core, REGION_CART_SRAM_MIRROR, &dst->sram_size);
+	// Quick fix to NullReferenceException; natt's old code
+	if (!dst->sram)
+	{
+		dst->sram = ctx->sram;
+	}
 }
 
 EXP int BizGetSaveRam(bizctx* ctx, void* data, int size)
