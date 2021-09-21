@@ -61,6 +61,7 @@ typedef struct
 	int lagged;
 	int skipbios;
 	uint32_t palette[65536];
+	void (*input_callback)(void);
 	void (*trace_callback)(const char *buffer);
 	void (*exec_callback)(uint32_t pc);
 	void (*mem_callback)(uint32_t addr, enum mWatchpointType type, uint32_t oldValue, uint32_t newValue);
@@ -89,17 +90,20 @@ static time_t GetTime(struct mRTCSource* rtcSource)
 static uint16_t GetKeys(struct mKeyCallback* keypadSource)
 {
 	bizctx *ctx = container_of(keypadSource, bizctx, keysource);
+	ctx->input_callback();
 	ctx->lagged = false;
 	return ctx->keys;
 }
 static void RotationCB(struct mRotationSource* rotationSource)
 {
 	bizctx* ctx = container_of(rotationSource, bizctx, rotsource);
+	ctx->input_callback();
 	ctx->lagged = false;
 }
 static void LightCB(struct GBALuminanceSource* luminanceSource)
 {
 	bizctx* ctx = container_of(luminanceSource, bizctx, lumasource);
+	ctx->input_callback();
 	ctx->lagged = false;
 }
 static void TimeCB(struct mRTCSource* rtcSource)
@@ -151,6 +155,11 @@ void exec_hook(struct mDebugger* debugger)
 	}
 	if (ctx->exec_callback)
 		ctx->exec_callback(_ARMPCAddress(debugger->core->cpu));
+}
+
+EXP void BizSetInputCallback(bizctx* ctx, void(*callback)(void))
+{
+	ctx->input_callback = callback;
 }
 
 EXP void BizSetTraceCallback(bizctx* ctx, void(*callback)(const char *buffer))
