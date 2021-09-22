@@ -288,7 +288,10 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 	const struct GBACartridge* cart = (const struct GBACartridge*) ctx->gba->memory.rom;
 	memcpy(ctx->override.id, &cart->id, sizeof(ctx->override.id));
 	GBAOverrideFind(NULL, &ctx->override); // apply defaults
-	ctx->override.savetype = dbinfo->savetype;
+	if (dbinfo->savetype != SAVEDATA_AUTODETECT)
+	{
+		ctx->override.savetype = dbinfo->savetype;
+	}
 	for (int i = 0; i < 5; i++)
 	{
 		if (!(dbinfo->hardware & (128 << i)))
