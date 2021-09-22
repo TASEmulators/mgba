@@ -52,6 +52,7 @@ typedef struct
 	struct mRTCSource rtcsource;
 	struct GBALuminanceSource lumasource;
 	struct mDebugger debugger;
+	struct GBACartridgeOverride override;
 	int16_t tiltx;
 	int16_t tilty;
 	int16_t tiltz;
@@ -122,6 +123,8 @@ static void resetinternal(bizctx* ctx)
 	ctx->core->reset(ctx->core);
 	if (ctx->skipbios)
 		GBASkipBIOS(ctx->gba);
+
+	GBAOverrideApply(ctx->gba, &ctx->override);
 }
 
 EXP void BizDestroy(bizctx* ctx)
@@ -281,17 +284,28 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 		ctx->core->loadBIOS(ctx->core, ctx->biosvf, 0);
 	}
 
-	if (dbinfo) // front end override
+	// setup overrides
+	const struct GBACartridge* cart = (const struct GBACartridge*) ctx->gba->memory.rom;
+	memcpy(ctx->override.id, &cart->id, sizeof(ctx->override.id));
+	GBAOverrideFind(NULL, &ctx->override); // apply defaults
+	ctx->override.savetype = dbinfo->savetype;
+	for (int i = 0; i < 5; i++)
 	{
-		struct GBACartridgeOverride override;
-		const struct GBACartridge* cart = (const struct GBACartridge*) ctx->gba->memory.rom;
-		memcpy(override.id, &cart->id, sizeof(override.id));
-		override.savetype = dbinfo->savetype;
-		override.hardware = dbinfo->hardware;
-		override.idleLoop = dbinfo->idleLoop;
-		GBAOverrideApply(ctx->gba, &override);
+		if (!(dbinfo->hardware & (128 << i)))
+		{
+			if (dbinfo->hardware & (1 << i))
+			{
+				ctx->override.hardware |= (1 << i);
+			}
+			else
+			{
+				ctx->override.hardware &= ~(1 << i);
+			}
+		}
 	}
-	
+	ctx->override.hardware |= dbinfo->hardware & 64; // gb player detect
+	ctx->override.idleLoop = dbinfo->idleLoop;
+
 	mDebuggerAttach(&ctx->debugger, ctx->core);
 	ctx->debugger.custom = exec_hook;
 	ctx->debugger.entered = watchpoint_entry;
