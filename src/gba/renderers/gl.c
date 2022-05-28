@@ -788,26 +788,6 @@ void GBAVideoGLRendererInit(struct GBAVideoRenderer* renderer) {
 	for (i = 0; i < 4; ++i) {
 		struct GBAVideoGLBackground* bg = &glRenderer->bg[i];
 		bg->index = i;
-		bg->enabled = 0;
-		bg->priority = 0;
-		bg->charBase = 0;
-		bg->mosaic = 0;
-		bg->multipalette = 0;
-		bg->screenBase = 0;
-		bg->overflow = 0;
-		bg->size = 0;
-		bg->target1 = 0;
-		bg->target2 = 0;
-		bg->x = 0;
-		bg->y = 0;
-		bg->refx = 0;
-		bg->refy = 0;
-		bg->affine.dx = 256;
-		bg->affine.dmx = 0;
-		bg->affine.dy = 0;
-		bg->affine.dmy = 256;
-		bg->affine.sx = 0;
-		bg->affine.sy = 0;
 		glGenFramebuffers(1, &bg->fbo);
 		glGenTextures(1, &bg->tex);
 	}
@@ -923,7 +903,42 @@ void GBAVideoGLRendererReset(struct GBAVideoRenderer* renderer) {
 	glRenderer->shadowRegs[REG_DISPCNT >> 1] = glRenderer->dispcnt;
 	glRenderer->regsDirty = 0xFFFFFFFFFFFEULL;
 
+	glRenderer->objOffsetX = 0;
+	glRenderer->objOffsetY = 0;
+
 	int i;
+	for (i = 0; i < 4; ++i) {
+		struct GBAVideoGLBackground* bg = &glRenderer->bg[i];
+		bg->index = i;
+		bg->enabled = 0;
+		bg->priority = 0;
+		bg->charBase = 0;
+		bg->mosaic = 0;
+		bg->multipalette = 0;
+		bg->screenBase = 0;
+		bg->overflow = 0;
+		bg->size = 0;
+		bg->target1 = 0;
+		bg->target2 = 0;
+		bg->x = 0;
+		bg->y = 0;
+		bg->refx = 0;
+		bg->refy = 0;
+		bg->affine.dx = 256;
+		bg->affine.dmx = 0;
+		bg->affine.dy = 0;
+		bg->affine.dmy = 256;
+		bg->affine.sx = 0;
+		bg->affine.sy = 0;
+		bg->offsetX = 0;
+		bg->offsetY = 0;
+	}
+
+	glRenderer->winN[0].offsetX = 0;
+	glRenderer->winN[0].offsetY = 0;
+	glRenderer->winN[1].offsetX = 0;
+	glRenderer->winN[1].offsetY = 0;
+
 	for (i = 0; i < 512; ++i) {
 		int r = M_R5(glRenderer->d.palette[i]);
 		int g = M_G5(glRenderer->d.palette[i]) << 1;
