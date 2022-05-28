@@ -20,9 +20,6 @@ LDFLAGS_32 = -static-libgcc
 LDFLAGS_64 =
 LDFLAGS = -shared $(LDFLAGS_$(ARCH)) $(CCFLAGS)
 
-DEST_32 = ../../../../../../Assets/dll
-DEST_64 = ../../../../../../Assets/dll
-
 PLAT_SRCS += \
 	$(ROOT_DIR)/platform/windows/memory.c
 
