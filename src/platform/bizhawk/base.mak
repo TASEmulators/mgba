@@ -6,6 +6,9 @@ CCFLAGS = \
 	-DM_CORE_GBA -DCOLOR_16_BIT -DMGBA_STANDALONE -DUSE_DEBUGGERS \
 	$(PLAT_FLAGS)
 
+DEST_64 = ../../../../../../Assets/dll
+DESTCOPY_64 = ../../../../../../output/dll
+
 SRCS = \
 	$(ROOT_DIR)/core/bitmap-cache.c \
 	$(ROOT_DIR)/core/cache-set.c \
@@ -119,6 +122,9 @@ clean:
 
 install: $(TARGET)
 	$(CP) $(TARGET) $(DEST_$(ARCH))
+ifneq ("$(wildcard $(DESTCOPY_$(ARCH)))", "")
+	$(CP) $(TARGET) $(DESTCOPY_$(ARCH))
+endif
 
 print-%:
 	@echo $* = $($*)
