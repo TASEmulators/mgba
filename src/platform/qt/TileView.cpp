@@ -25,11 +25,24 @@ TileView::TileView(std::shared_ptr<CoreController> controller, QWidget* parent)
 	m_ui.setupUi(this);
 	m_ui.tile->setController(controller);
 
-	connect(m_ui.tiles, &TilePainter::indexPressed, m_ui.tile, &AssetTile::selectIndex);
+	connect(m_ui.tiles, &TilePainter::indexPressed, this, [this](int index) {
+		if (m_ui.tilesObj->isChecked()) {
+			switch (m_controller->platform()) {
+#ifdef M_CORE_GBA
+			case mPLATFORM_GBA:
+				index += 2048 >> m_ui.palette256->isChecked();
+				break;
+#endif
+			default:
+				break;
+			}
+		}
+		m_ui.tile->selectIndex(index);
+	});
 	connect(m_ui.tiles, &TilePainter::needsRedraw, this, [this]() {
 		updateTiles(true);
 	});
-	connect(m_ui.tilesSelector, qOverload<int>(&QButtonGroup::buttonClicked), this, [this]() {
+	connect(m_ui.tilesSelector, qOverload<QAbstractButton*>(&QButtonGroup::buttonClicked), this, [this]() {
 		updateTiles(true);
 	});
 	connect(m_ui.paletteId, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &TileView::updatePalette);

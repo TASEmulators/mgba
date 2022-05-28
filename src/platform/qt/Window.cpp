@@ -123,6 +123,12 @@ Window::Window(CoreManager* manager, ConfigController* config, int playerId, QWi
 		}
 	}, this);
 	m_config->updateOption("showLibrary");
+
+	ConfigOption* showFilenameInLibrary = m_config->addOption("showFilenameInLibrary");
+	showFilenameInLibrary->connect([this](const QVariant& value) {
+			m_libraryView->setShowFilename(value.toBool());
+	}, this); 
+    m_config->updateOption("showFilenameInLibrary");
 	ConfigOption* libraryStyle = m_config->addOption("libraryStyle");
 	libraryStyle->connect([this](const QVariant& value) {
 		m_libraryView->setViewStyle(static_cast<LibraryStyle>(value.toInt()));
@@ -173,8 +179,8 @@ Window::~Window() {
 #endif
 }
 
-void Window::argumentsPassed(mArguments* args) {
-	loadConfig();
+void Window::argumentsPassed() {
+	const mArguments* args = m_config->args();
 
 	if (args->patch) {
 		m_pendingPatch = args->patch;
@@ -197,8 +203,23 @@ void Window::argumentsPassed(mArguments* args) {
 	}
 #endif
 
+	if (m_config->graphicsOpts()->multiplier) {
+		m_savedScale = m_config->graphicsOpts()->multiplier;
+
+#if defined(M_CORE_GBA)
+		QSize size(GBA_VIDEO_HORIZONTAL_PIXELS, GBA_VIDEO_VERTICAL_PIXELS);
+#elif defined(M_CORE_GB)
+		QSize size(GB_VIDEO_HORIZONTAL_PIXELS, GB_VIDEO_VERTICAL_PIXELS);
+#endif
+		resizeFrame(size * m_savedScale);
+	}
+
 	if (args->fname) {
 		setController(m_manager->loadGame(args->fname), args->fname);
+	}
+
+	if (m_config->graphicsOpts()->fullscreen) {
+		enterFullScreen();
 	}
 }
 
@@ -904,7 +925,18 @@ void Window::gameStarted() {
 			action->setActive(true);
 		}
 	}
+	interrupter.resume();
+
 	m_actions.rebuildMenu(menuBar(), this, *m_shortcutController);
+
+#ifdef M_CORE_GBA
+	if (m_controller->platform() == mPLATFORM_GBA) {
+		QVariant eCardList = m_config->takeArgvOption(QString("ecard"));
+		if (eCardList.canConvert(QMetaType::QStringList)) {
+			m_controller->scanCards(eCardList.toStringList());
+		}
+	}
+#endif
 
 #ifdef USE_DISCORD_RPC
 	DiscordCoordinator::gameStarted(m_controller);
@@ -995,7 +1027,7 @@ void Window::reloadDisplayDriver() {
 		m_display->stopDrawing();
 		detachWidget(m_display.get());
 	}
-	m_display = std::unique_ptr<Display>(Display::create(this));
+	m_display = std::unique_ptr<QGBA::Display>(Display::create(this));
 	if (!m_display) {
 		LOG(QT, ERROR) << tr("Failed to create an appropriate display device, falling back to software display. "
 		                     "Games may run slowly, especially with larger windows.");
@@ -1007,12 +1039,12 @@ void Window::reloadDisplayDriver() {
 	m_shaderView = std::make_unique<ShaderSelector>(m_display.get(), m_config);
 #endif
 
-	connect(m_display.get(), &Display::hideCursor, [this]() {
+	connect(m_display.get(), &QGBA::Display::hideCursor, [this]() {
 		if (static_cast<QStackedLayout*>(m_screenWidget->layout())->currentWidget() == m_display.get()) {
 			m_screenWidget->setCursor(Qt::BlankCursor);
 		}
 	});
-	connect(m_display.get(), &Display::showCursor, [this]() {
+	connect(m_display.get(), &QGBA::Display::showCursor, [this]() {
 		m_screenWidget->unsetCursor();
 	});
 
@@ -1341,9 +1373,7 @@ void Window::setupMenu(QMenuBar* menubar) {
 	}
 
 	m_actions.addSeparator("file");
-	m_multiWindow = m_actions.addAction(tr("New multiplayer window"), "multiWindow", [this]() {
-		GBAApp::app()->newWindow();
-	}, "file");
+	m_multiWindow = m_actions.addAction(tr("New multiplayer window"), "multiWindow", GBAApp::app(), &GBAApp::newWindow, "file");
 
 #ifdef M_CORE_GBA
 	Action* dolphin = m_actions.addAction(tr("Connect to Dolphin..."), "connectDolphin", openNamedTView<DolphinConnector>(&m_dolphinView, this), "file");
@@ -1901,7 +1931,7 @@ Action* Window::addGameAction(const QString& visibleName, const QString& name, A
 
 template<typename T, typename V>
 Action* Window::addGameAction(const QString& visibleName, const QString& name, T* obj, V (T::*method)(), const QString& menu, const QKeySequence& shortcut) {
-	return addGameAction(visibleName, name, [this, obj, method]() {
+	return addGameAction(visibleName, name, [obj, method]() {
 		(obj->*method)();
 	}, menu, shortcut);
 }
@@ -2025,6 +2055,15 @@ void Window::setController(CoreController* controller, const QString& fname) {
 	connect(m_controller.get(), &CoreController::failed, this, &Window::gameFailed);
 	connect(m_controller.get(), &CoreController::unimplementedBiosCall, this, &Window::unimplementedBiosCall);
 
+#ifdef M_CORE_GBA
+	if (m_controller->platform() == mPLATFORM_GBA) {
+		QVariant mb = m_config->takeArgvOption(QString("mb"));
+		if (mb.canConvert(QMetaType::QString)) {
+			m_controller->replaceGame(mb.toString());
+		}
+	}
+#endif
+
 #ifdef USE_GDB_STUB
 	if (m_gdbController) {
 		m_gdbController->setController(m_controller);
@@ -2080,7 +2119,7 @@ void Window::setController(CoreController* controller, const QString& fname) {
 
 void Window::attachDisplay() {
 	m_display->attach(m_controller);
-	connect(m_display.get(), &Display::drawingStarted, this, &Window::changeRenderer);
+	connect(m_display.get(), &QGBA::Display::drawingStarted, this, &Window::changeRenderer);
 	m_display->startDrawing(m_controller);
 }
 
