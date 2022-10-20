@@ -126,7 +126,8 @@ static void resetinternal(bizctx* ctx)
 	if (ctx->skipbios)
 		GBASkipBIOS(ctx->gba);
 
-	GBAOverrideApply(ctx->gba, &ctx->override);
+	if (ctx->gba->memory.rom)
+		GBAOverrideApply(ctx->gba, &ctx->override);
 }
 
 EXP void BizDestroy(bizctx* ctx)
@@ -226,6 +227,13 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 
 	memcpy(ctx->rom, data, length);
 	ctx->romvf = VFileFromMemory(ctx->rom, length);
+	if (!ctx->romvf)
+	{
+		free(ctx->rom);
+		free(ctx);
+		return NULL;
+	}
+
 	ctx->core = GBACoreCreate();
 	if (!ctx->core)
 	{
@@ -234,13 +242,15 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 		free(ctx);
 		return NULL;
 	}
+
 	mCoreInitConfig(ctx->core, NULL);
+
 	if (!ctx->core->init(ctx->core))
 	{
-		free(ctx->rom);
-		free(ctx);
+		BizDestroy(ctx);
 		return NULL;
 	}
+
 	ctx->gba = ctx->core->board;
 
 	ctx->core->setVideoBuffer(ctx->core, ctx->vbuff, GBA_VIDEO_HORIZONTAL_PIXELS);
@@ -249,9 +259,20 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 	blip_set_rates(ctx->core->getAudioChannel(ctx->core, 0), ctx->core->frequency(ctx->core), 44100);
 	blip_set_rates(ctx->core->getAudioChannel(ctx->core, 1), ctx->core->frequency(ctx->core), 44100);
 
-	ctx->core->loadROM(ctx->core, ctx->romvf);
+	if (!ctx->core->loadROM(ctx->core, ctx->romvf))
+	{
+		BizDestroy(ctx);
+		return NULL;
+	}
+
 	memset(ctx->sram, 0xff, 131072);
 	ctx->sramvf = VFileFromMemory(ctx->sram, 131072);
+	if (!ctx->sramvf)
+	{
+		BizDestroy(ctx);
+		return NULL;
+	}
+
 	ctx->core->loadSave(ctx->core, ctx->sramvf);
 
 	mCoreSetRTC(ctx->core, &ctx->rtcsource);
@@ -288,28 +309,31 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 
 	// setup overrides
 	const struct GBACartridge* cart = (const struct GBACartridge*) ctx->gba->memory.rom;
-	memcpy(ctx->override.id, &cart->id, sizeof(ctx->override.id));
-	GBAOverrideFind(NULL, &ctx->override); // apply defaults
-	if (dbinfo->savetype != SAVEDATA_AUTODETECT)
+	if (cart)
 	{
-		ctx->override.savetype = dbinfo->savetype;
-	}
-	for (int i = 0; i < 5; i++)
-	{
-		if (!(dbinfo->hardware & (128 << i)))
+		memcpy(ctx->override.id, &cart->id, sizeof(ctx->override.id));
+		GBAOverrideFind(NULL, &ctx->override); // apply defaults
+		if (dbinfo->savetype != SAVEDATA_AUTODETECT)
 		{
-			if (dbinfo->hardware & (1 << i))
+			ctx->override.savetype = dbinfo->savetype;
+		}
+		for (int i = 0; i < 5; i++)
+		{
+			if (!(dbinfo->hardware & (128 << i)))
 			{
-				ctx->override.hardware |= (1 << i);
-			}
-			else
-			{
-				ctx->override.hardware &= ~(1 << i);
+				if (dbinfo->hardware & (1 << i))
+				{
+					ctx->override.hardware |= (1 << i);
+				}
+				else
+				{
+					ctx->override.hardware &= ~(1 << i);
+				}
 			}
 		}
+		ctx->override.hardware |= dbinfo->hardware & 64; // gb player detect
+		ctx->override.idleLoop = dbinfo->idleLoop;
 	}
-	ctx->override.hardware |= dbinfo->hardware & 64; // gb player detect
-	ctx->override.idleLoop = dbinfo->idleLoop;
 
 	mDebuggerAttach(&ctx->debugger, ctx->core);
 	ctx->debugger.custom = exec_hook;
@@ -392,6 +416,11 @@ EXP void BizGetMemoryAreas(bizctx* ctx, struct MemoryAreas* dst)
 	// so getMemoryBlock may return nothing until the save type is detected.
 	// (returning the buffer directly avoids 0-size and variable-size savedata)
 	dst->sram = ctx->sram;
+	// If ROM is not present (due to multiboot), send our raw buffer over
+	if (!dst->rom)
+	{
+		dst->rom = ctx->rom;
+	}
 }
 
 EXP int BizGetSaveRam(bizctx* ctx, void* data, int size)

@@ -17,7 +17,7 @@ ROOT_DIR := $(MAKEFILE_DIR)/../../..
 OBJ_DIR := $(MAKEFILE_DIR)/obj
 
 LDFLAGS_64 =
-LDFLAGS = -shared $(LDFLAGS_$(ARCH)) $(CCFLAGS)
+LDFLAGS = -shared -s $(LDFLAGS_$(ARCH)) $(CCFLAGS)
 
 PLAT_SRCS += \
 	$(ROOT_DIR)/platform/posix/memory.c

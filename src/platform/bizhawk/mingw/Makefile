@@ -18,7 +18,7 @@ OBJ_DIR := $(MAKEFILE_DIR)/obj
 
 LDFLAGS_32 = -static-libgcc
 LDFLAGS_64 =
-LDFLAGS = -shared $(LDFLAGS_$(ARCH)) $(CCFLAGS)
+LDFLAGS = -shared -s $(LDFLAGS_$(ARCH)) $(CCFLAGS)
 
 PLAT_SRCS += \
 	$(ROOT_DIR)/platform/windows/memory.c

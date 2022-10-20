@@ -7,5 +7,5 @@ else
 	cd "$BASEDIR/src/platform/bizhawk/mingw"
 fi
 make clean
-make
+make -j
 make install
