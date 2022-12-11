@@ -70,6 +70,9 @@ static const struct GBACartridgeOverride _overrides[] = {
 	{ "AI2E", SAVEDATA_FORCE_NONE, HW_NONE, IDLE_LOOP_NONE, false },
 	{ "AI2P", SAVEDATA_FORCE_NONE, HW_NONE, IDLE_LOOP_NONE, false },
 
+	// Game Boy Wars Advance 1+2
+	{ "BGWJ", SAVEDATA_FLASH1M, HW_NONE, IDLE_LOOP_NONE, false },
+
 	// Golden Sun: The Lost Age
 	{ "AGFE", SAVEDATA_FLASH512, HW_NONE, 0x801353A, false },
 
@@ -226,7 +229,6 @@ bool GBAOverrideFind(const struct Configuration* config, struct GBACartridgeOver
 	if (!found && override->id[0] == 'F') {
 		// Classic NES Series
 		override->savetype = SAVEDATA_EEPROM;
-		override->mirroring = true;
 		found = true;
 	}
 
@@ -339,6 +341,7 @@ void GBAOverrideApply(struct GBA* gba, const struct GBACartridgeOverride* overri
 
 		if (override->hardware & HW_RTC) {
 			GBAHardwareInitRTC(&gba->memory.hw);
+			GBASavedataRTCRead(&gba->memory.savedata);
 		}
 
 		if (override->hardware & HW_GYRO) {
@@ -373,10 +376,6 @@ void GBAOverrideApply(struct GBA* gba, const struct GBACartridgeOverride* overri
 		if (gba->idleOptimization == IDLE_LOOP_DETECT) {
 			gba->idleOptimization = IDLE_LOOP_REMOVE;
 		}
-	}
-
-	if (override->mirroring) {
-		gba->memory.mirroring = true;
 	}
 }
 

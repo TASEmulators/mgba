@@ -15,7 +15,7 @@
 #include <fcntl.h>
 
 MGBA_EXPORT const uint32_t GBASavestateMagic = 0x01000000;
-MGBA_EXPORT const uint32_t GBASavestateVersion = 0x00000004;
+MGBA_EXPORT const uint32_t GBASavestateVersion = 0x00000007;
 
 mLOG_DEFINE_CATEGORY(GBA_STATE, "GBA Savestate", "gba.serialize");
 
@@ -211,8 +211,7 @@ bool GBADeserialize(struct GBA* gba, const struct GBASerializedState* state) {
 		GBAMatrixDeserialize(gba, state);
 	}
 
-	gba->timing.reroot = gba->timing.root;
-	gba->timing.root = NULL;
+	mTimingInterrupt(&gba->timing);
 
 	return true;
 }

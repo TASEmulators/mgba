@@ -237,7 +237,7 @@ static bool _GBACoreInit(struct mCore* core) {
 #if !defined(MINIMAL_CORE) || MINIMAL_CORE < 2
 	mDirectorySetInit(&core->dirs);
 #endif
-	
+
 	return true;
 }
 
@@ -446,6 +446,7 @@ static void _GBACoreSetVideoGLTex(struct mCore* core, unsigned texid) {
 #ifdef BUILD_GLES3
 	struct GBACore* gbacore = (struct GBACore*) core;
 	gbacore->glRenderer.outputTex = texid;
+	gbacore->glRenderer.outputTexDirty = true;
 #else
 	UNUSED(core);
 	UNUSED(texid);
@@ -502,13 +503,16 @@ static void _GBACoreSetAVStream(struct mCore* core, struct mAVStream* stream) {
 		core->desiredVideoDimensions(core, &width, &height);
 		stream->videoDimensionsChanged(stream, width, height);
 	}
+	if (stream && stream->audioRateChanged) {
+		stream->audioRateChanged(stream, GBA_ARM7TDMI_FREQUENCY / gba->audio.sampleInterval);
+	}
 }
 
 static bool _GBACoreLoadROM(struct mCore* core, struct VFile* vf) {
 #ifdef USE_ELF
 	struct ELF* elf = ELFOpen(vf);
 	if (elf) {
-		if (ELFEntry(elf) == BASE_CART0) {
+		if (GBAVerifyELFEntry(elf, BASE_CART0)) {
 			GBALoadNull(core->board);
 		}
 		bool success = mCoreLoadELF(core, elf);
@@ -568,8 +572,16 @@ static void _GBACoreUnloadROM(struct mCore* core) {
 	GBAUnloadROM(core->board);
 }
 
+static size_t _GBACoreROMSize(const struct mCore* core) {
+	const struct GBA* gba = (const struct GBA*) core->board;
+	if (gba->romVf) {
+		return gba->romVf->size(gba->romVf);
+	}
+	return gba->pristineRomSize;
+}
+
 static void _GBACoreChecksum(const struct mCore* core, void* data, enum mCoreChecksumType type) {
-	struct GBA* gba = (struct GBA*) core->board;
+	const struct GBA* gba = (const struct GBA*) core->board;
 	switch (type) {
 	case mCHECKSUM_CRC32:
 		memcpy(data, &gba->romCrc32, sizeof(gba->romCrc32));
@@ -700,6 +712,8 @@ static void _GBACoreReset(struct mCore* core) {
 	if (forceSkip || (core->opts.skipBios && (gba->romVf || gba->memory.rom))) {
 		GBASkipBIOS(core->board);
 	}
+
+	mTimingInterrupt(&gba->timing);
 }
 
 static void _GBACoreRunFrame(struct mCore* core) {
@@ -1362,6 +1376,7 @@ struct mCore* GBACoreCreate(void) {
 	core->loadTemporarySave = _GBACoreLoadTemporarySave;
 	core->loadPatch = _GBACoreLoadPatch;
 	core->unloadROM = _GBACoreUnloadROM;
+	core->romSize = _GBACoreROMSize;
 	core->checksum = _GBACoreChecksum;
 	core->reset = _GBACoreReset;
 	core->runFrame = _GBACoreRunFrame;

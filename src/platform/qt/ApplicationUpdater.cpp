@@ -73,7 +73,7 @@ QStringList ApplicationUpdater::listChannels() {
 QString ApplicationUpdater::currentChannel() {
 	QLatin1String version(projectVersion);
 	QLatin1String branch(gitBranch);
-	if (branch == QLatin1String("heads/") + version) {
+	if (branch == QLatin1String("heads/") + version || branch == version) {
 		return QLatin1String("stable");
 	} else {
 		return QLatin1String("dev");
@@ -136,8 +136,16 @@ QUrl ApplicationUpdater::parseManifest(const QByteArray& manifest) {
 
 QString ApplicationUpdater::destination() const {
 	QFileInfo path(updateInfo().url.path());
-	QDir dir(ConfigController::configDir());
-	return dir.filePath(QLatin1String("update.") + path.completeSuffix());
+	QDir dir(ConfigController::cacheDir());
+	// QFileInfo::completeSuffix will eat all .'s in the filename...including
+	// ones in the version string, turning mGBA-1.0.0-win32.7z into
+	// 0.0-win32.7z instead of the intended .7z
+	// As a result, so we have to split out the complete suffix manually.
+	QString suffix(path.suffix());
+	if (path.completeBaseName().endsWith(".tar")) {
+		suffix = "tar." + suffix;
+	}
+	return dir.filePath(QLatin1String("update.") + suffix);
 }
 
 const char* ApplicationUpdater::platform() {
@@ -150,7 +158,15 @@ const char* ApplicationUpdater::platform() {
 	return uninstallInfo.exists() ? "win32-installer" : "win32";
 #endif
 #elif defined(Q_OS_MACOS)
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
+	// Modern macOS build
+	return "macos";
+#else
+	// Legacy "OS X" build
 	return "osx";
+#endif
+#elif defined(Q_OS_LINUX) && defined(__x86_64__)
+	return "appimage-x64";
 #else
 	// Return one that will be up to date, but we can't download
 	return "win64";

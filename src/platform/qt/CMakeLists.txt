@@ -39,7 +39,6 @@ if(NOT ${QT}Widgets_FOUND)
 endif()
 
 if(APPLE)
-	execute_process(COMMAND xcrun --show-sdk-version OUTPUT_VARIABLE MACOSX_SDK)
 	if(MACOSX_SDK VERSION_GREATER 10.14)
 		list(APPEND QT_DEFINES USE_SHARE_WIDGET)
 	endif()
@@ -87,6 +86,7 @@ set(SOURCE_FILES
 	AudioProcessor.cpp
 	CheatsModel.cpp
 	CheatsView.cpp
+	CheckBoxDelegate.cpp
 	ConfigController.cpp
 	ColorPicker.cpp
 	CoreManager.cpp
@@ -94,6 +94,11 @@ set(SOURCE_FILES
 	Display.cpp
 	DisplayGL.cpp
 	DisplayQt.cpp
+	ForwarderController.cpp
+	ForwarderGenerator.cpp
+	ForwarderGenerator3DS.cpp
+	ForwarderGeneratorVita.cpp
+	ForwarderView.cpp
 	FrameView.cpp
 	GBAApp.cpp
 	GBAKeyEditor.cpp
@@ -151,6 +156,7 @@ set(UI_FILES
 	CheatsView.ui
 	DebuggerConsole.ui
 	DolphinConnector.ui
+	ForwarderView.ui
 	FrameView.ui
 	GIFView.ui
 	IOViewer.ui
@@ -247,13 +253,32 @@ if(USE_DISCORD_RPC)
 	list(APPEND SOURCE_FILES DiscordCoordinator.cpp)
 endif()
 
+if(ENABLE_SCRIPTING)
+	list(APPEND SOURCE_FILES
+		scripting/ScriptingController.cpp
+		scripting/ScriptingTextBuffer.cpp
+		scripting/ScriptingTextBufferModel.cpp
+		scripting/ScriptingView.cpp)
+
+	list(APPEND UI_FILES
+		scripting/ScriptingView.ui)
+endif()
+
 if(TARGET Qt6::Core)
 	qt_add_resources(RESOURCES resources.qrc)
 else()
 	qt5_add_resources(RESOURCES resources.qrc)
 endif()
+
 if(BUILD_UPDATER)
-	file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/updater.qrc INPUT ${CMAKE_CURRENT_SOURCE_DIR}/updater.qrc.in)
+	if(DEFINED CMAKE_CONFIGURATION_TYPES)
+		# Required for e.g. MSVC
+		file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/updater.qrc INPUT ${CMAKE_CURRENT_SOURCE_DIR}/updater.qrc.in)
+	else()
+		# Required for qt_add_resources to manage dependencies properly
+		# TODO: Figure out how to do this with MSVC too
+		configure_file(${CMAKE_CURRENT_SOURCE_DIR}/updater-config.qrc.in ${CMAKE_CURRENT_BINARY_DIR}/updater.qrc)
+	endif()
 	if(TARGET Qt6::Core)
 		qt_add_resources(UPDATER_RESOURCES ${CMAKE_CURRENT_BINARY_DIR}/updater.qrc)
 	else()
@@ -291,6 +316,9 @@ endif()
 if(BUILD_GL OR BUILD_GLES2 OR BUILD_EPOXY)
 	install(DIRECTORY ${CMAKE_SOURCE_DIR}/res/shaders DESTINATION ${DATADIR} COMPONENT ${BINARY_NAME}-qt)
 endif()
+if(ENABLE_SCRIPTING AND USE_LUA)
+	install(DIRECTORY ${CMAKE_SOURCE_DIR}/res/scripts DESTINATION ${DATADIR} COMPONENT ${BINARY_NAME}-qt)
+endif()
 install(FILES ${CMAKE_SOURCE_DIR}/res/nointro.dat DESTINATION ${DATADIR} COMPONENT ${BINARY_NAME}-qt)
 if(NOT WIN32 AND NOT APPLE)
 	if(DATADIR MATCHES "^\\.[.\\]")
@@ -307,9 +335,9 @@ if(${QT}LinguistTools_FOUND)
 	file(GLOB TS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/ts/${BINARY_NAME}-*.ts")
 	if(UPDATE_TRANSLATIONS)
 		if(TARGET Qt6::Core)
-			qt_create_translation(TRANSLATION_FILES ${SOURCE_FILES} ${UI_FILES} ${TS_FILES} OPTIONS -locations absolute -no-obsolete)
+			qt_create_translation(TRANSLATION_FILES ${SOURCE_FILES} ${AUDIO_SRC} ${PLATFORM_SRC} ${UI_FILES} ${TS_FILES} OPTIONS -locations absolute -no-obsolete -I "${CMAKE_CURRENT_SOURCE_DIR}")
 		else()
-			qt5_create_translation(TRANSLATION_FILES ${SOURCE_FILES} ${UI_FILES} ${TS_FILES} OPTIONS -locations absolute -no-obsolete)
+			qt5_create_translation(TRANSLATION_FILES ${SOURCE_FILES} ${AUDIO_SRC} ${PLATFORM_SRC} ${UI_FILES} ${TS_FILES} OPTIONS -locations absolute -no-obsolete -I "${CMAKE_CURRENT_SOURCE_DIR}")
 		endif()
 		list(REMOVE_ITEM TS_FILES "${CMAKE_CURRENT_SOURCE_DIR}/ts/${BINARY_NAME}-template.ts")
 	else()
@@ -335,9 +363,14 @@ if(${QT}LinguistTools_FOUND)
 		endforeach()
 		list(APPEND TRANSLATION_FILES ${QT_QM_FILES})
 	endif()
-	add_custom_command(OUTPUT ${TRANSLATION_QRC}
-		               COMMAND ${CMAKE_COMMAND} -DTRANSLATION_QRC:FILEPATH="${TRANSLATION_QRC}" -DQM_BASE="${CMAKE_CURRENT_BINARY_DIR}" "-DTRANSLATION_FILES='${TRANSLATION_FILES}'" -P "${CMAKE_CURRENT_SOURCE_DIR}/ts.cmake"
-		               DEPENDS ${TRANSLATION_FILES})
+
+	file(WRITE ${TRANSLATION_QRC} "<RCC>\n\t<qresource prefix=\"/translations/\">\n")
+	foreach(TS ${TRANSLATION_FILES})
+		get_filename_component(TS_BASE "${TS}" NAME)
+		file(APPEND ${TRANSLATION_QRC} "\t\t<file alias=\"${TS_BASE}\">${TS}</file>\n")
+	endforeach()
+	file(APPEND ${TRANSLATION_QRC} "\t</qresource>\n</RCC>")
+
 	if(TARGET Qt6::Core)
 		qt_add_resources(TRANSLATION_RESOURCES ${TRANSLATION_QRC})
 	else()
@@ -379,7 +412,10 @@ if(QT_STATIC)
 		find_package(Cups)
 		find_package(${QT}PrintSupport)
 		list(APPEND QT_LIBRARIES Cups ${QT}::PrintSupport ${QT}::QCocoaIntegrationPlugin ${QT}::CoreAudioPlugin ${QT}::AVFServicePlugin ${QT}::QCocoaPrinterSupportPlugin)
-		list(APPEND QT_LIBRARIES ${QT}AccessibilitySupport ${QT}CglSupport ${QT}ClipboardSupport ${QT}FontDatabaseSupport ${QT}GraphicsSupport ${QT}ThemeSupport)
+		list(APPEND QT_LIBRARIES ${QT}AccessibilitySupport ${QT}ClipboardSupport ${QT}FontDatabaseSupport ${QT}GraphicsSupport ${QT}ThemeSupport)
+		if(CMAKE_SYSTEM_VERSION VERSION_LESS "19.0")
+			list(APPEND QT_LIBRARIES ${QT}CglSupport)
+		endif()
 		list(APPEND QT_LIBRARIES "-framework AVFoundation" "-framework CoreMedia" "-framework SystemConfiguration" "-framework Security")
 		set_target_properties(${QT}::Core PROPERTIES INTERFACE_LINK_LIBRARIES "${QTPCRE}")
 	elseif(UNIX)
@@ -393,7 +429,7 @@ install(TARGETS ${BINARY_NAME}-qt
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${BINARY_NAME}-qt
 	BUNDLE DESTINATION ${APPDIR} COMPONENT ${BINARY_NAME}-qt)
 if(UNIX AND NOT APPLE)
-	install(FILES ${CMAKE_SOURCE_DIR}/res/mgba-qt.desktop DESTINATION share/applications COMPONENT ${BINARY_NAME}-qt)
+	install(FILES ${CMAKE_SOURCE_DIR}/res/mgba-qt.desktop DESTINATION share/applications RENAME io.mgba.${PROJECT_NAME}.desktop COMPONENT ${BINARY_NAME}-qt)
 endif()
 if(UNIX AND NOT (APPLE AND DISTBUILD))
 	install(FILES ${CMAKE_SOURCE_DIR}/doc/mgba-qt.6 DESTINATION ${MANDIR}/man6 COMPONENT ${BINARY_NAME}-qt)

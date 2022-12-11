@@ -115,7 +115,7 @@ static float gyroZ = 0;
 static float tiltX = 0;
 static float tiltY = 0;
 
-static struct GBAStereoSample audioBuffer[N_BUFFERS][BUFFER_SIZE / 4] __attribute__((__aligned__(0x1000)));
+static struct mStereoSample audioBuffer[N_BUFFERS][BUFFER_SIZE / 4] __attribute__((__aligned__(0x1000)));
 
 static enum ScreenMode {
 	SM_PA,
@@ -584,7 +584,7 @@ static void _postAudioBuffer(struct mAVStream* stream, blip_t* left, blip_t* rig
 		blip_clear(right);
 		return;
 	}
-	struct GBAStereoSample* samples = audioBuffer[audioBufferActive];
+	struct mStereoSample* samples = audioBuffer[audioBufferActive];
 	blip_read_samples(left, &samples[0].left, SAMPLES, true);
 	blip_read_samples(right, &samples[0].right, SAMPLES, true);
 	audoutAppendAudioOutBuffer(&audoutBuffer[audioBufferActive]);
@@ -1061,10 +1061,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (argc > 1) {
-		size_t i;
-		for (i = 0; runner.keySources[i].id; ++i) {
-			mInputMapLoad(&runner.params.keyMap, runner.keySources[i].id, mCoreConfigGetInput(&runner.config));
-		}
+		mGUILoadInputMaps(&runner);
 		mGUIRun(&runner, argv[1]);
 	} else {
 		mGUIRunloop(&runner);

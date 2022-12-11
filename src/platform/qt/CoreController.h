@@ -68,6 +68,8 @@ public:
 		void interrupt(std::shared_ptr<CoreController>);
 		void resume();
 
+		bool held() const;
+
 	private:
 		void interrupt();
 		void resume(CoreController*);
@@ -174,6 +176,7 @@ public slots:
 	void setRealTime();
 	void setFixedTime(const QDateTime& time);
 	void setFakeEpoch(const QDateTime& time);
+	void setTimeOffset(qint64 offset);
 
 	void importSharkport(const QString& path);
 	void exportSharkport(const QString& path);
@@ -238,8 +241,12 @@ private:
 	void updateROMInfo();
 
 	mCoreThread m_threadContext{};
+	struct CoreLogger : public mLogger {
+		CoreController* self;
+	} m_logger{};
 
 	bool m_patched = false;
+	bool m_preload = false;
 
 	uint32_t m_crc32;
 	QString m_internalTitle;

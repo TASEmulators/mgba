@@ -12,6 +12,7 @@
 #include <QSysInfo>
 #include <QWindow>
 
+#include <mgba/core/cheats.h>
 #include <mgba/core/serialize.h>
 #include <mgba/core/version.h>
 #include <mgba-util/png-io.h>
@@ -59,6 +60,10 @@
 
 #ifdef USE_LIBZIP
 #include <zip.h>
+#endif
+
+#ifdef USE_LUA
+#include <lua.h>
 #endif
 
 #ifdef USE_LZMA
@@ -168,6 +173,11 @@ void ReportView::generateReport() {
 #else
 	swReport << QString("libLZMA not linked");
 #endif
+#ifdef USE_LUA
+	swReport << QString("Lua version: %1").arg(QLatin1String(LUA_RELEASE));
+#else
+	swReport << QString("Lua not linked");
+#endif
 #ifdef USE_MINIZIP
 	swReport << QString("minizip linked");
 #else
@@ -256,6 +266,17 @@ void ReportView::generateReport() {
 					windowReport << QString("Size: %1").arg(rom.size());
 				}
 				addROMInfo(windowReport, controller.get());
+
+				mCheatDevice* device = controller->cheatDevice();
+				if (device) {
+					VFileDevice vf(VFileDevice::openMemory());
+					mCheatSaveFile(device, vf);
+					vf.seek(0);
+					QByteArray cheats(vf.readAll());
+					if (cheats.size()) {
+						addReport(QString("Cheats %1").arg(winId), QString::fromUtf8(cheats));
+					}
+				}
 
 				if (m_ui.includeSave->isChecked() && !m_ui.includeState->isChecked()) {
 					// Only do the save separately if savestates aren't enabled, to guarantee consistency

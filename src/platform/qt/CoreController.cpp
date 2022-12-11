@@ -144,19 +144,19 @@ CoreController::CoreController(mCore* core, QObject* parent)
 		QMetaObject::invokeMethod(controller, "unpaused");
 	};
 
-	m_threadContext.logger.d.log = [](mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args) {
-		mThreadLogger* logContext = reinterpret_cast<mThreadLogger*>(logger);
-		mCoreThread* context = logContext->p;
+	m_logger.self = this;
+	m_logger.log = [](mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args) {
+		CoreLogger* logContext = static_cast<CoreLogger*>(logger);
 
 		static const char* savestateMessage = "State %i saved";
 		static const char* loadstateMessage = "State %i loaded";
 		static const char* savestateFailedMessage = "State %i failed to load";
 		static int biosCat = -1;
 		static int statusCat = -1;
-		if (!context) {
+		if (!logContext) {
 			return;
 		}
-		CoreController* controller = static_cast<CoreController*>(context->userData);
+		CoreController* controller = logContext->self;
 		QString message;
 		if (biosCat < 0) {
 			biosCat = mLogCategoryById("gba.bios");
@@ -201,10 +201,10 @@ CoreController::CoreController(mCore* core, QObject* parent)
 		message = QString::vasprintf(format, args);
 		QMetaObject::invokeMethod(controller, "logPosted", Q_ARG(int, level), Q_ARG(int, category), Q_ARG(const QString&, message));
 		if (level == mLOG_FATAL) {
-			mCoreThreadMarkCrashed(controller->thread());
 			QMetaObject::invokeMethod(controller, "crashed", Q_ARG(const QString&, message));
 		}
 	};
+	m_threadContext.logger.logger = &m_logger;
 }
 
 CoreController::~CoreController() {
@@ -287,6 +287,7 @@ void CoreController::loadConfig(ConfigController* config) {
 	m_fastForwardMute = config->getOption("fastForwardMute", -1).toInt();
 	mCoreConfigCopyValue(&m_threadContext.core->config, config->config(), "volume");
 	mCoreConfigCopyValue(&m_threadContext.core->config, config->config(), "mute");
+	m_preload = config->getOption("preload").toInt();
 
 	int playerId = m_multiplayer->playerId(this) + 1;
 	QVariant savePlayerId = config->getOption("savePlayerId");
@@ -423,7 +424,7 @@ void CoreController::setInputController(InputController* inputController) {
 void CoreController::setLogger(LogController* logger) {
 	disconnect(m_log);
 	m_log = logger;
-	m_threadContext.logger.d.filter = logger->filter();
+	m_logger.filter = logger->filter();
 	connect(this, &CoreController::logPosted, m_log, &LogController::postLog);
 }
 
@@ -612,6 +613,7 @@ void CoreController::loadState(int slot) {
 		m_stateSlot = slot;
 		m_backupSaveState.clear();
 	}
+	mCoreThreadClearCrashed(&m_threadContext);
 	mCoreThreadRunFunction(&m_threadContext, [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 		if (!controller->m_backupLoadState.isOpen()) {
@@ -631,6 +633,7 @@ void CoreController::loadState(const QString& path, int flags) {
 	if (flags != -1) {
 		m_loadStateFlags = flags;
 	}
+	mCoreThreadClearCrashed(&m_threadContext);
 	mCoreThreadRunFunction(&m_threadContext, [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 		VFile* vf = VFileDevice::open(controller->m_statePath, O_RDONLY);
@@ -659,6 +662,7 @@ void CoreController::loadState(QIODevice* iodev, int flags) {
 	if (flags != -1) {
 		m_loadStateFlags = flags;
 	}
+	mCoreThreadClearCrashed(&m_threadContext);
 	mCoreThreadRunFunction(&m_threadContext, [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 		VFile* vf = controller->m_stateVf;
@@ -829,7 +833,11 @@ void CoreController::replaceGame(const QString& path) {
 	QString fname = info.canonicalFilePath();
 	Interrupter interrupter(this);
 	mDirectorySetDetachBase(&m_threadContext.core->dirs);
-	mCoreLoadFile(m_threadContext.core, fname.toUtf8().constData());
+	if (m_preload) {
+		mCorePreloadFile(m_threadContext.core, fname.toUtf8().constData());
+	} else {
+		mCoreLoadFile(m_threadContext.core, fname.toUtf8().constData());
+	}
 	updateROMInfo();
 }
 
@@ -893,6 +901,11 @@ void CoreController::setFakeEpoch(const QDateTime& time) {
 	m_threadContext.core->rtc.value = time.toMSecsSinceEpoch();
 }
 
+void CoreController::setTimeOffset(qint64 offset) {
+	m_threadContext.core->rtc.override = RTC_WALLCLOCK_OFFSET;
+	m_threadContext.core->rtc.value = offset * 1000LL;
+}
+
 void CoreController::scanCard(const QString& path) {
 #ifdef M_CORE_GBA
 	QImage image(path);
@@ -901,7 +914,10 @@ void CoreController::scanCard(const QString& path) {
 		if (!file.open(QIODevice::ReadOnly)) {
 			return;
 		}
-		m_eReaderData = file.read(2912);
+		QByteArray eReaderData = file.read(2912);
+		if (eReaderData.isEmpty()) {
+			return;
+		}
 
 		file.seek(0);
 		QStringList lines;
@@ -923,6 +939,7 @@ void CoreController::scanCard(const QString& path) {
 			}
 		}
 		scanCards(lines);
+		m_eReaderData = eReaderData;
 	} else if (image.size() == QSize(989, 44) || image.size() == QSize(639, 44)) {
 		const uchar* bits = image.constBits();
 		size_t size;
@@ -1228,24 +1245,21 @@ void CoreController::updateFastForward() {
 		if (m_fastForwardMute >= 0) {
 			m_threadContext.core->opts.mute = m_fastForwardMute || m_mute;
 		}
+		setSync(false);
 
 		// If we aren't holding the fast forward button
 		// then use the non "(held)" ratio
 		if(!m_fastForward) {
 			if (m_fastForwardRatio > 0) {
 				m_threadContext.impl->sync.fpsTarget = m_fpsTarget * m_fastForwardRatio;
-				setSync(true);
-			}	else {
-				setSync(false);
+				m_threadContext.impl->sync.audioWait = true;
 			}
 		} else {
 			// If we are holding the fast forward button,
 			// then use the held ratio
 			if (m_fastForwardHeldRatio > 0) {
 				m_threadContext.impl->sync.fpsTarget = m_fpsTarget * m_fastForwardHeldRatio;
-				setSync(true);
-			} else {
-				setSync(false);
+				m_threadContext.impl->sync.audioWait = true;
 			}
 		}
 	} else {
@@ -1347,4 +1361,8 @@ void CoreController::Interrupter::resume(CoreController* controller) {
 	}
 
 	mCoreThreadContinue(controller->thread());
+}
+
+bool CoreController::Interrupter::held() const {
+	return m_parent && m_parent->thread()->impl;
 }

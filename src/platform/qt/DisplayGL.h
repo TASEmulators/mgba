@@ -32,6 +32,7 @@
 #include <QTimer>
 
 #include <array>
+#include <memory>
 
 #include "CoreController.h"
 #include "VideoProxy.h"
@@ -49,9 +50,12 @@ class mGLWidget : public QOpenGLWidget {
 Q_OBJECT
 
 public:
+	mGLWidget(QWidget* parent = nullptr);
+
 	void setTex(GLuint tex) { m_tex = tex; }
 	void setVBO(GLuint vbo) { m_vbo = vbo; }
-	void finalizeVAO();
+	bool finalizeVAO();
+	void reset();
 
 protected:
 	void initializeGL() override;
@@ -62,8 +66,8 @@ private:
 	GLuint m_vbo;
 
 	bool m_vaoDone = false;
-	QOpenGLVertexArrayObject m_vao;
-	QOpenGLShaderProgram m_program;
+	std::unique_ptr<QOpenGLVertexArrayObject> m_vao;
+	std::unique_ptr<QOpenGLShaderProgram> m_program;
 	GLuint m_positionLocation;
 
 	QTimer m_refresh;
@@ -108,8 +112,12 @@ protected:
 	virtual void paintEvent(QPaintEvent*) override { forceDraw(); }
 	virtual void resizeEvent(QResizeEvent*) override;
 
+private slots:
+	void setupProxyThread();
+
 private:
 	void resizePainter();
+	bool shouldDisableUpdates();
 
 	static QHash<QSurfaceFormat, bool> s_supports;
 
@@ -117,8 +125,11 @@ private:
 	bool m_hasStarted = false;
 	std::unique_ptr<PainterGL> m_painter;
 	QThread m_drawThread;
+	QThread m_proxyThread;
 	std::shared_ptr<CoreController> m_context;
 	mGLWidget* m_gl;
+	QOffscreenSurface m_proxySurface;
+	std::unique_ptr<QOpenGLContext> m_proxyContext;
 };
 
 class PainterGL : public QObject {
@@ -132,12 +143,20 @@ public:
 	void setContext(std::shared_ptr<CoreController>);
 	void setMessagePainter(MessagePainter*);
 	void enqueue(const uint32_t* backing);
+	void enqueue(GLuint tex);
+
+	void stop();
 
 	bool supportsShaders() const { return m_supportsShaders; }
 	int glTex();
 
+	QOpenGLContext* shareContext();
+
 	void setVideoProxy(std::shared_ptr<VideoProxy>);
 	void interrupt();
+
+	// Run on main thread
+	void swapTex();
 
 public slots:
 	void create();
@@ -146,7 +165,6 @@ public slots:
 	void forceDraw();
 	void draw();
 	void start();
-	void stop();
 	void pause();
 	void unpause();
 	void resize(const QSize& size);
@@ -157,13 +175,19 @@ public slots:
 	void showFrameCounter(bool enable);
 	void filter(bool filter);
 	void resizeContext();
+	void updateFramebufferHandle();
 
 	void setShaders(struct VDir*);
 	void clearShaders();
 	VideoShader* shaders();
 
 signals:
+	void created();
 	void started();
+	void texSwapped();
+
+private slots:
+	void doStop();
 
 private:
 	void makeCurrent();
@@ -175,6 +199,14 @@ private:
 	QList<uint32_t*> m_free;
 	QQueue<uint32_t*> m_queue;
 	uint32_t* m_buffer = nullptr;
+
+	std::array<GLuint, 3> m_bridgeTexes;
+	QQueue<GLuint> m_freeTex;
+	QQueue<GLuint> m_queueTex;
+
+	GLuint m_bridgeTexIn = std::numeric_limits<GLuint>::max();
+	GLuint m_bridgeTexOut = std::numeric_limits<GLuint>::max();
+
 	QPainter m_painter;
 	QMutex m_mutex;
 	QWindow* m_window;
