@@ -15,6 +15,15 @@
 #include "mgba-util/common.h"
 #include "mgba-util/vfs.h"
 
+// interop sanity checks
+static_assert(sizeof(bool) == 1, "Wrong bool size!");
+static_assert(sizeof(color_t) == 2, "Wrong color_t size!");
+static_assert(sizeof(enum mWatchpointType) == 4, "Wrong mWatchpointType size!");
+static_assert(sizeof(enum SavedataType) == 4, "Wrong SavedataType size!");
+static_assert(sizeof(enum GBAHardwareDevice) == 4, "Wrong GBAHardwareDevice size!");
+static_assert(sizeof(ssize_t) == 8, "Wrong ssize_t size!");
+static_assert(sizeof(void*) == 8, "Wrong pointer size!");
+
 const char* const binaryName = "mgba";
 const char* const projectName = "mGBA BizHawk";
 const char* const projectVersion = "(unknown)";
@@ -45,9 +54,9 @@ typedef struct
 	color_t vbuff[GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS];
 	void* rom;
 	struct VFile* romvf;
-	char bios[16384];
+	uint8_t bios[16384];
 	struct VFile* biosvf;
-	char sram[131072];
+	uint8_t sram[131072 + 16];
 	struct VFile* sramvf;
 	struct mKeyCallback keysource;
 	struct mRotationSource rotsource;
@@ -61,8 +70,8 @@ typedef struct
 	int64_t time;
 	uint8_t light;
 	uint16_t keys;
-	int lagged;
-	int skipbios;
+	bool lagged;
+	bool skipbios;
 	uint32_t palette[65536];
 	void (*input_callback)(void);
 	void (*trace_callback)(const char *buffer);
@@ -122,12 +131,21 @@ static void logdebug(struct mLogger* logger, int category, enum mLogLevel level,
 
 static void resetinternal(bizctx* ctx)
 {
+	// RTC will be reinit on GBAOverrideApply
+	// The RTC data contents in the sramvf are also read back
+	// This is done so RTC data is up to date
+	// note reset internally calls GBAOverrideApply potentially, so we do this now
+	GBASavedataRTCWrite(&ctx->gba->memory.savedata);
+
 	ctx->core->reset(ctx->core);
 	if (ctx->skipbios)
 		GBASkipBIOS(ctx->gba);
 
 	if (ctx->gba->memory.rom)
+	{
+		GBASavedataRTCWrite(&ctx->gba->memory.savedata); // again to be safe (not sure if needed?)
 		GBAOverrideApply(ctx->gba, &ctx->override);
+	}
 }
 
 EXP void BizDestroy(bizctx* ctx)
@@ -142,6 +160,8 @@ typedef struct
 	enum SavedataType savetype;
 	enum GBAHardwareDevice hardware;
 	uint32_t idleLoop;
+	bool vbaBugCompat;
+	bool detectPokemonRomHacks;
 } overrideinfo;
 
 void exec_hook(struct mDebugger* debugger)
@@ -194,7 +214,8 @@ static void watchpoint_entry(struct mDebugger* debugger, enum mDebuggerEntryReas
 EXP ssize_t BizSetWatchpoint(bizctx* ctx, uint32_t addr, enum mWatchpointType type)
 {
 	struct mWatchpoint watchpoint = {
-		.address = addr,
+		.minAddress = addr,
+		.maxAddress = addr + 1,
 		.segment = -1,
 		.type = type
 	};
@@ -206,7 +227,7 @@ EXP bool BizClearWatchpoint(bizctx* ctx, ssize_t id)
 	return ctx->debugger.platform->clearBreakpoint(ctx->debugger.platform, id);
 }
 
-EXP bizctx* BizCreate(const void* bios, const void* data, int length, const overrideinfo* dbinfo, int skipbios)
+EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const overrideinfo* overrides, bool skipbios)
 {
 	bizctx* ctx = calloc(1, sizeof(*ctx));
 	if (!ctx)
@@ -265,8 +286,8 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 		return NULL;
 	}
 
-	memset(ctx->sram, 0xff, 131072);
-	ctx->sramvf = VFileFromMemory(ctx->sram, 131072);
+	memset(ctx->sram, 0xff, 131072 + 16);
+	ctx->sramvf = VFileFromMemory(ctx->sram, 131072 + 16);
 	if (!ctx->sramvf)
 	{
 		BizDestroy(ctx);
@@ -276,7 +297,7 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 	ctx->core->loadSave(ctx->core, ctx->sramvf);
 
 	mCoreSetRTC(ctx->core, &ctx->rtcsource);
-	
+
 	ctx->gba->idleOptimization = IDLE_LOOP_IGNORE; // Don't do "idle skipping"
 	ctx->gba->keyCallback = &ctx->keysource; // Callback for key reading
 
@@ -307,39 +328,101 @@ EXP bizctx* BizCreate(const void* bios, const void* data, int length, const over
 		ctx->core->loadBIOS(ctx->core, ctx->biosvf, 0);
 	}
 
-	// setup overrides
+	// setup overrides (largely copy paste from GBAOverrideApplyDefaults, with minor changes for our wants)
 	const struct GBACartridge* cart = (const struct GBACartridge*) ctx->gba->memory.rom;
 	if (cart)
 	{
 		memcpy(ctx->override.id, &cart->id, sizeof(ctx->override.id));
-		GBAOverrideFind(NULL, &ctx->override); // apply defaults
-		if (dbinfo->savetype != SAVEDATA_AUTODETECT)
+		bool isPokemon = false, isKnownPokemon = false;
+
+		if (overrides->detectPokemonRomHacks)
 		{
-			ctx->override.savetype = dbinfo->savetype;
-		}
-		for (int i = 0; i < 5; i++)
-		{
-			if (!(dbinfo->hardware & (128 << i)))
+			static const uint32_t pokemonTable[] =
 			{
-				if (dbinfo->hardware & (1 << i))
+				// Emerald
+				0x4881F3F8, // BPEJ
+				0x8C4D3108, // BPES
+				0x1F1C08FB, // BPEE
+				0x34C9DF89, // BPED
+				0xA3FDCCB1, // BPEF
+				0xA0AEC80A, // BPEI
+
+				// FireRed
+				0x1A81EEDF, // BPRD
+				0x3B2056E9, // BPRJ
+				0x5DC668F6, // BPRF
+				0x73A72167, // BPRI
+				0x84EE4776, // BPRE rev 1
+				0x9F08064E, // BPRS
+				0xBB640DF7, // BPRJ rev 1
+				0xDD88761C, // BPRE
+
+				// Ruby
+				0x61641576, // AXVE rev 1
+				0xAEAC73E6, // AXVE rev 2
+				0xF0815EE7, // AXVE
+			};
+
+			isPokemon = isPokemon || !strncmp("pokemon red version", &((const char*) ctx->gba->memory.rom)[0x108], 20);
+			isPokemon = isPokemon || !strncmp("pokemon emerald version", &((const char*) ctx->gba->memory.rom)[0x108], 24);
+			isPokemon = isPokemon || !strncmp("AXVE", &((const char*) ctx->gba->memory.rom)[0xAC], 4);
+
+			if (isPokemon)
+			{
+				size_t i;
+				for (i = 0; !isKnownPokemon && i < sizeof(pokemonTable) / sizeof(*pokemonTable); ++i)
 				{
-					ctx->override.hardware |= (1 << i);
-				}
-				else
-				{
-					ctx->override.hardware &= ~(1 << i);
+					isKnownPokemon = ctx->gba->romCrc32 == pokemonTable[i];
 				}
 			}
 		}
-		ctx->override.hardware |= dbinfo->hardware & 64; // gb player detect
-		ctx->override.idleLoop = dbinfo->idleLoop;
+
+		if (isPokemon && !isKnownPokemon)
+		{
+			ctx->override.savetype = SAVEDATA_FLASH1M;
+			ctx->override.hardware = HW_RTC;
+			ctx->override.vbaBugCompat = true;
+		}
+		else
+		{
+			GBAOverrideFind(NULL, &ctx->override); // apply defaults
+			if (overrides->savetype != SAVEDATA_AUTODETECT)
+			{
+				ctx->override.savetype = overrides->savetype;
+			}
+			for (int i = 0; i < 5; i++)
+			{
+				if (!(overrides->hardware & (128 << i)))
+				{
+					if (overrides->hardware & (1 << i))
+					{
+						ctx->override.hardware |= (1 << i);
+					}
+					else
+					{
+						ctx->override.hardware &= ~(1 << i);
+					}
+				}
+			}
+			ctx->override.hardware |= overrides->hardware & 64; // gb player detect
+			ctx->override.vbaBugCompat = overrides->vbaBugCompat;
+		}
+
+		ctx->override.idleLoop = overrides->idleLoop;
 	}
 
 	mDebuggerAttach(&ctx->debugger, ctx->core);
 	ctx->debugger.custom = exec_hook;
 	ctx->debugger.entered = watchpoint_entry;
-	
+
 	resetinternal(ctx);
+
+	// proper init RTC, our buffer would have trashed it
+	if (ctx->override.hardware & HW_RTC)
+	{
+		GBAHardwareInitRTC(&ctx->gba->memory.hw);
+	}
+
 	return ctx;
 }
 
@@ -358,7 +441,7 @@ static void blit(uint32_t* dst, const color_t* src, const uint32_t* palette)
 	}
 }
 
-EXP int BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, int* nsamp, int16_t* sbuff,
+EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp, int16_t* sbuff,
 	int64_t time, int16_t gyrox, int16_t gyroy, int16_t gyroz, uint8_t luma)
 {
 	ctx->core->setKeys(ctx->core, keys);
@@ -423,65 +506,70 @@ EXP void BizGetMemoryAreas(bizctx* ctx, struct MemoryAreas* dst)
 	}
 }
 
-EXP int BizGetSaveRam(bizctx* ctx, void* data, int size)
+EXP uint32_t BizGetSaveRam(bizctx* ctx, void* data, uint32_t size)
 {
+	GBASavedataRTCWrite(&ctx->gba->memory.savedata); // make sure RTC data is up to date
 	ctx->sramvf->seek(ctx->sramvf, 0, SEEK_SET);
 	return ctx->sramvf->read(ctx->sramvf, data, size);
 }
 
-EXP void BizPutSaveRam(bizctx* ctx, const void* data, int size)
+EXP void BizPutSaveRam(bizctx* ctx, const void* data, uint32_t size)
 {
 	ctx->sramvf->seek(ctx->sramvf, 0, SEEK_SET);
 	ctx->sramvf->write(ctx->sramvf, data, size);
+	if ((ctx->override.hardware & HW_RTC) && (size & 0xff)) // RTC data is in the save, read it out
+	{
+		GBASavedataRTCRead(&ctx->gba->memory.savedata);
+	}
 }
 
 // state sizes can vary!
-EXP int BizStartGetState(bizctx* ctx, struct VFile** file, int* size)
+EXP bool BizStartGetState(bizctx* ctx, struct VFile** file, uint32_t* size)
 {
 	struct VFile* vf = VFileMemChunk(NULL, 0);
 	if (!mCoreSaveStateNamed(ctx->core, vf, SAVESTATE_SAVEDATA))
 	{
 		vf->close(vf);
-		return 0;
+		return false;
 	}
 	*file = vf;
 	*size = vf->seek(vf, 0, SEEK_END);
-	return 1;
+	return true;
 }
 
-EXP void BizFinishGetState(struct VFile* file, void* data, int size)
+EXP void BizFinishGetState(struct VFile* file, void* data, uint32_t size)
 {
 	file->seek(file, 0, SEEK_SET);
 	file->read(file, data, size);
 	file->close(file);
 }
 
-EXP int BizPutState(bizctx* ctx, const void* data, int size)
+EXP bool BizPutState(bizctx* ctx, const void* data, uint32_t size)
 {
 	struct VFile* vf = VFileFromConstMemory(data, size);
-	int ret = mCoreLoadStateNamed(ctx->core, vf, SAVESTATE_SAVEDATA);
+	bool ret = mCoreLoadStateNamed(ctx->core, vf, SAVESTATE_SAVEDATA);
 	vf->close(vf);
 	return ret;
 }
 
-EXP void BizSetLayerMask(bizctx *ctx, int mask)
+EXP void BizSetLayerMask(bizctx *ctx, uint32_t mask)
 {
 	for (int i = 0; i < 5; i++)
 		ctx->core->enableVideoLayer(ctx->core, i, mask & 1 << i);
 }
 
-EXP void BizSetSoundMask(bizctx* ctx, int mask)
+EXP void BizSetSoundMask(bizctx* ctx, uint32_t mask)
 {
 	for (int i = 0; i < 6; i++)
 		ctx->core->enableAudioChannel(ctx->core, i, mask & 1 << i);
 }
 
-EXP void BizGetRegisters(bizctx* ctx, int* dest)
+EXP void BizGetRegisters(bizctx* ctx, int32_t* dest)
 {
-	memcpy(dest, ctx->gba->cpu, 18 * sizeof(int));
+	memcpy(dest, ctx->gba->cpu, 18 * sizeof(int32_t));
 }
 
-EXP void BizSetRegister(bizctx* ctx, int index, int value)
+EXP void BizSetRegister(bizctx* ctx, int32_t index, int32_t value)
 {
 	if (index >= 0 && index < 16)
 	{
@@ -490,12 +578,12 @@ EXP void BizSetRegister(bizctx* ctx, int index, int value)
 
 	if (index == 16)
 	{
-		memcpy(&ctx->gba->cpu->cpsr, &value, sizeof(int));
+		memcpy(&ctx->gba->cpu->cpsr, &value, sizeof(int32_t));
 	}
 
 	if (index == 17)
 	{
-		memcpy(&ctx->gba->cpu->spsr, &value, sizeof(int));
+		memcpy(&ctx->gba->cpu->spsr, &value, sizeof(int32_t));
 	}
 }
 

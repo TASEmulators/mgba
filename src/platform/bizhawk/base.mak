@@ -1,7 +1,7 @@
 CCFLAGS = \
 	-O3 -fomit-frame-pointer -fexpensive-optimizations -flto \
 	-I../../../../include -I../../.. \
-	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch -std=gnu99 \
+	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch -std=gnu11 \
 	-DHAVE_LOCALTIME_R -DMINIMAL_CORE=2 -DDISABLE_THREADING \
 	-DM_CORE_GBA -DCOLOR_16_BIT -DMGBA_STANDALONE -DUSE_DEBUGGERS \
 	$(PLAT_FLAGS)
@@ -24,7 +24,6 @@ SRCS = \
 	$(ROOT_DIR)/core/map-cache.c \
 	$(ROOT_DIR)/core/mem-search.c \
 	$(ROOT_DIR)/core/rewind.c \
-	$(ROOT_DIR)/core/scripting.c \
 	$(ROOT_DIR)/core/serialize.c \
 	$(ROOT_DIR)/core/sync.c \
 	$(ROOT_DIR)/core/thread.c \
