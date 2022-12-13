@@ -54,9 +54,9 @@ typedef struct
 	color_t vbuff[GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS];
 	void* rom;
 	struct VFile* romvf;
-	uint8_t bios[16384];
+	uint8_t bios[0x4000];
 	struct VFile* biosvf;
-	uint8_t sram[131072 + 16];
+	uint8_t sram[0x20000 + 16];
 	struct VFile* sramvf;
 	struct mKeyCallback keysource;
 	struct mRotationSource rotsource;
@@ -72,7 +72,7 @@ typedef struct
 	uint16_t keys;
 	bool lagged;
 	bool skipbios;
-	uint32_t palette[65536];
+	uint32_t palette[0x10000];
 	void (*input_callback)(void);
 	void (*trace_callback)(const char *buffer);
 	void (*exec_callback)(uint32_t pc);
@@ -286,8 +286,8 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 		return NULL;
 	}
 
-	memset(ctx->sram, 0xff, 131072 + 16);
-	ctx->sramvf = VFileFromMemory(ctx->sram, 131072 + 16);
+	memset(ctx->sram, 0xff, sizeof(ctx->sram));
+	ctx->sramvf = VFileFromMemory(ctx->sram, sizeof(ctx->sram));
 	if (!ctx->sramvf)
 	{
 		BizDestroy(ctx);
@@ -316,8 +316,8 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 
 	if (bios)
 	{
-		memcpy(ctx->bios, bios, 16384);
-		ctx->biosvf = VFileFromMemory(ctx->bios, 16384);
+		memcpy(ctx->bios, bios, sizeof(ctx->bios));
+		ctx->biosvf = VFileFromMemory(ctx->bios, sizeof(ctx->bios));
 		/*if (!GBAIsBIOS(ctx->biosvf))
 		{
 			ctx->biosvf->close(ctx->biosvf);
