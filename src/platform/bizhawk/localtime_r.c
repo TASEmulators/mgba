@@ -75,3 +75,97 @@ struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
   tmbuf->tm_isdst = 0;
   return tmbuf;
 }
+
+#ifdef _WIN32
+time_t _mktime64(struct tm *tmbuf) {
+#else
+time_t mktime(struct tm *tmbuf) {
+#endif
+  long day, year;
+  int tm_year;
+  int yday, month;
+  /*unsigned*/ long seconds;
+  int overflow;
+
+  tmbuf->tm_min += tmbuf->tm_sec / 60;
+  tmbuf->tm_sec %= 60;
+  if (tmbuf->tm_sec < 0) {
+    tmbuf->tm_sec += 60;
+    tmbuf->tm_min--;
+  }
+  tmbuf->tm_hour += tmbuf->tm_min / 60;
+  tmbuf->tm_min = tmbuf->tm_min % 60;
+  if (tmbuf->tm_min < 0) {
+    tmbuf->tm_min += 60;
+    tmbuf->tm_hour--;
+  }
+  day = tmbuf->tm_hour / 24;
+  tmbuf->tm_hour= tmbuf->tm_hour % 24;
+  if (tmbuf->tm_hour < 0) {
+    tmbuf->tm_hour += 24;
+    day--;
+  }
+  tmbuf->tm_year += tmbuf->tm_mon / 12;
+  tmbuf->tm_mon %= 12;
+  if (tmbuf->tm_mon < 0) {
+    tmbuf->tm_mon += 12;
+    tmbuf->tm_year--;
+  }
+  day += (tmbuf->tm_mday - 1);
+  while (day < 0) {
+    if(--tmbuf->tm_mon < 0) {
+      tmbuf->tm_year--;
+      tmbuf->tm_mon = 11;
+    }
+    day += _ytab[LEAPYEAR(YEAR0 + tmbuf->tm_year)][tmbuf->tm_mon];
+  }
+  while (day >= _ytab[LEAPYEAR(YEAR0 + tmbuf->tm_year)][tmbuf->tm_mon]) {
+    day -= _ytab[LEAPYEAR(YEAR0 + tmbuf->tm_year)][tmbuf->tm_mon];
+    if (++(tmbuf->tm_mon) == 12) {
+      tmbuf->tm_mon = 0;
+      tmbuf->tm_year++;
+    }
+  }
+  tmbuf->tm_mday = day + 1;
+  year = EPOCH_YR;
+  if (tmbuf->tm_year < year - YEAR0) return (time_t) -1;
+  seconds = 0;
+  day = 0;                      // Means days since day 0 now
+  overflow = 0;
+
+  // Assume that when day becomes negative, there will certainly
+  // be overflow on seconds.
+  // The check for overflow needs not to be done for leapyears
+  // divisible by 400.
+  // The code only works when year (1970) is not a leapyear.
+  tm_year = tmbuf->tm_year + YEAR0;
+
+  if (TIME_MAX / 365 < tm_year - year) overflow++;
+  day = (tm_year - year) * 365;
+  if (TIME_MAX - day < (tm_year - year) / 4 + 1) overflow++;
+  day += (tm_year - year) / 4 + ((tm_year % 4) && tm_year % 4 < year % 4);
+  day -= (tm_year - year) / 100 + ((tm_year % 100) && tm_year % 100 < year % 100);
+  day += (tm_year - year) / 400 + ((tm_year % 400) && tm_year % 400 < year % 400);
+
+  yday = month = 0;
+  while (month < tmbuf->tm_mon) {
+    yday += _ytab[LEAPYEAR(tm_year)][month];
+    month++;
+  }
+  yday += (tmbuf->tm_mday - 1);
+  if (day + yday < 0) overflow++;
+  day += yday;
+
+  tmbuf->tm_yday = yday;
+  tmbuf->tm_wday = (day + 4) % 7;               // Day 0 was thursday (4)
+
+  seconds = ((tmbuf->tm_hour * 60L) + tmbuf->tm_min) * 60L + tmbuf->tm_sec;
+
+  if ((TIME_MAX - seconds) / SECS_DAY < day) overflow++;
+  seconds += day * SECS_DAY;
+
+  if (overflow) return (time_t) -1;
+
+  if ((time_t) seconds != seconds) return (time_t) -1;
+  return (time_t) seconds;
+}
