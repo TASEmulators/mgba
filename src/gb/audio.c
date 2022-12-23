@@ -116,7 +116,6 @@ void GBAudioReset(struct GBAudio* audio) {
 	audio->ch3.wavedata8[13] = 0xFF;
 	audio->ch3.wavedata8[14] = 0x00;
 	audio->ch3.wavedata8[15] = 0xFF;
-	audio->ch3.window = 0;
 	audio->ch4 = (struct GBAudioNoiseChannel) { .envelope = { .dead = 2 } };
 	audio->frame = 0;
 	audio->sampleInterval = SAMPLE_INTERVAL * GB_MAX_SAMPLES;
@@ -401,13 +400,13 @@ void GBAudioWriteNR44(struct GBAudio* audio, uint8_t value) {
 }
 
 void GBAudioWriteNR50(struct GBAudio* audio, uint8_t value) {
-	GBAudioRun(audio, mTimingCurrentTime(audio->timing), 0x2);
+	GBAudioRun(audio, mTimingCurrentTime(audio->timing), 0xF);
 	audio->volumeRight = GBRegisterNR50GetVolumeRight(value);
 	audio->volumeLeft = GBRegisterNR50GetVolumeLeft(value);
 }
 
 void GBAudioWriteNR51(struct GBAudio* audio, uint8_t value) {
-	GBAudioRun(audio, mTimingCurrentTime(audio->timing), 0x2);
+	GBAudioRun(audio, mTimingCurrentTime(audio->timing), 0xF);
 	audio->ch1Right = GBRegisterNR51GetCh1Right(value);
 	audio->ch2Right = GBRegisterNR51GetCh2Right(value);
 	audio->ch3Right = GBRegisterNR51GetCh3Right(value);
