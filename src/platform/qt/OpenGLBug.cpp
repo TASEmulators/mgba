@@ -18,6 +18,7 @@ bool glContextHasBug(OpenGLBug bug) {
 	QOpenGLFunctions* fn = context->functions();
 	QString vendor(reinterpret_cast<const char*>(fn->glGetString(GL_VENDOR)));
 	QString renderer(reinterpret_cast<const char*>(fn->glGetString(GL_RENDERER)));
+	QString version(reinterpret_cast<const char*>(fn->glGetString(GL_VERSION)));
 
 	switch (bug) {
 	case OpenGLBug::CROSS_THREAD_FLUSH:
@@ -26,6 +27,21 @@ bool glContextHasBug(OpenGLBug bug) {
 #else
 		return vendor == "Intel";
 #endif
+
+	case OpenGLBug::GLTHREAD_BLOCKS_SWAP:
+		return version.contains(" Mesa ");
+
+	case OpenGLBug::IG4ICD_CRASH:
+#ifdef Q_OS_WIN
+		if (vendor != "Intel") {
+			return false;
+		}
+		if (renderer == "Intel Pineview Platform") {
+			return true;
+		}
+#endif
+		return false;
+
 	default:
 		return false;
 	}

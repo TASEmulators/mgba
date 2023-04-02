@@ -103,10 +103,15 @@ set(SOURCE_FILES
 	GBAApp.cpp
 	GBAKeyEditor.cpp
 	GIFView.cpp
-	GamepadAxisEvent.cpp
-	GamepadButtonEvent.cpp
-	GamepadHatEvent.cpp
 	IOViewer.cpp
+	input/Gamepad.cpp
+	input/GamepadAxisEvent.cpp
+	input/GamepadButtonEvent.cpp
+	input/GamepadHatEvent.cpp
+	input/InputDriver.cpp
+	input/InputSource.cpp
+	input/InputMapper.cpp
+	input/KeySource.cpp
 	InputController.cpp
 	InputProfile.cpp
 	KeyEditor.cpp
@@ -198,6 +203,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS},libqt5widgets5
 
 set(AUDIO_SRC)
 if(BUILD_SDL)
+	list(APPEND SOURCE_FILES input/SDLInputDriver.cpp)
 	list(APPEND AUDIO_SRC AudioProcessorSDL.cpp)
 endif()
 
@@ -216,7 +222,7 @@ if(${QT}Multimedia_FOUND)
 	list(APPEND SOURCE_FILES
 		VideoDumper.cpp)
 	if (WIN32 AND QT_STATIC)
-		list(APPEND QT_LIBRARIES ${QT}::QWindowsAudioPlugin ${QT}::DSServicePlugin ${QT}::QWindowsVistaStylePlugin
+		list(APPEND QT_LIBRARIES ${QT}::QWindowsAudioPlugin ${QT}::DSServicePlugin ${QT}::QWindowsVistaStylePlugin ${QT}::QJpegPlugin
                                  strmiids mfuuid mfplat mf ksguid dxva2 evr d3d9)
 	endif()
 	list(APPEND QT_LIBRARIES ${QT}::Multimedia)
@@ -420,7 +426,7 @@ if(QT_STATIC)
 		list(APPEND QT_LIBRARIES "-framework AVFoundation" "-framework CoreMedia" "-framework SystemConfiguration" "-framework Security")
 		set_target_properties(${QT}::Core PROPERTIES INTERFACE_LINK_LIBRARIES "${QTPCRE}")
 	elseif(UNIX)
-		list(APPEND QT_LIBRARIES ${QT}::FontDatabaseSupport ${QT}::XcbQpa)
+		list(APPEND QT_LIBRARIES ${QT}::FontDatabaseSupport ${QT}::XcbQpa ${QT}::QWaylandIntegrationPlugin)
 	endif()
 endif()
 target_link_libraries(${BINARY_NAME}-qt ${PLATFORM_LIBRARY} ${BINARY_NAME} ${QT_LIBRARIES})

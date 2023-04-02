@@ -80,7 +80,7 @@ CoreController::CoreController(mCore* core, QObject* parent)
 
 	m_threadContext.resetCallback = [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
-		for (auto action : controller->m_resetActions) {
+		for (auto& action : controller->m_resetActions) {
 			action();
 		}
 
@@ -266,9 +266,13 @@ mPlatform CoreController::platform() const {
 
 QSize CoreController::screenDimensions() const {
 	unsigned width, height;
-	m_threadContext.core->desiredVideoDimensions(m_threadContext.core, &width, &height);
+	m_threadContext.core->currentVideoSize(m_threadContext.core, &width, &height);
 
 	return QSize(width, height);
+}
+
+unsigned CoreController::videoScale() const {
+	return m_threadContext.core->videoScale(m_threadContext.core);
 }
 
 void CoreController::loadConfig(ConfigController* config) {
@@ -288,13 +292,6 @@ void CoreController::loadConfig(ConfigController* config) {
 	mCoreConfigCopyValue(&m_threadContext.core->config, config->config(), "volume");
 	mCoreConfigCopyValue(&m_threadContext.core->config, config->config(), "mute");
 	m_preload = config->getOption("preload").toInt();
-
-	int playerId = m_multiplayer->playerId(this) + 1;
-	QVariant savePlayerId = config->getOption("savePlayerId");
-	if (m_multiplayer->attached() < 2 && savePlayerId.canConvert<int>()) {
-		playerId = savePlayerId.toInt();
-	}
-	mCoreConfigSetOverrideIntValue(&m_threadContext.core->config, "savePlayerId", playerId);
 
 	QSize sizeBefore = screenDimensions();
 	m_activeBuffer.resize(256 * 224 * sizeof(color_t));
@@ -518,9 +515,6 @@ void CoreController::setRewinding(bool rewind) {
 }
 
 void CoreController::rewind(int states) {
-	if (!states) {
-		return;
-	}
 	if (!m_threadContext.core->opts.rewindEnable) {
 		emit statusPosted(tr("Rewinding not currently enabled"));
 	}
@@ -1189,7 +1183,7 @@ int CoreController::updateAutofire() {
 void CoreController::finishFrame() {
 	if (!m_hwaccel) {
 		unsigned width, height;
-		m_threadContext.core->desiredVideoDimensions(m_threadContext.core, &width, &height);
+		m_threadContext.core->currentVideoSize(m_threadContext.core, &width, &height);
 
 		QMutexLocker locker(&m_bufferMutex);
 		memcpy(m_completeBuffer.data(), m_activeBuffer.constData(), width * height * BYTES_PER_PIXEL);
@@ -1219,7 +1213,12 @@ void CoreController::updatePlayerSave() {
 	int savePlayerId = 0;
 	mCoreConfigGetIntValue(&m_threadContext.core->config, "savePlayerId", &savePlayerId);
 	if (savePlayerId == 0 || m_multiplayer->attached() > 1) {
-		savePlayerId = m_multiplayer->playerId(this) + 1;
+		if (savePlayerId == m_multiplayer->playerId(this) + 1) {
+			// Player 1 is using our save, so let's use theirs, at least for now.
+			savePlayerId = 1;
+		} else {
+			savePlayerId = m_multiplayer->playerId(this) + 1;
+		}
 	}
 
 	QString saveSuffix;

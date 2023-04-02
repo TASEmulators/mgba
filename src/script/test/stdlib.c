@@ -10,31 +10,13 @@
 #include <mgba/script/macros.h>
 #include <mgba/script/types.h>
 
+#include "script/test.h"
+
 #define SETUP_LUA \
 	struct mScriptContext context; \
 	mScriptContextInit(&context); \
 	struct mScriptEngineContext* lua = mScriptContextRegisterEngine(&context, mSCRIPT_ENGINE_LUA); \
 	mScriptContextAttachStdlib(&context)
-
-#define LOAD_PROGRAM(PROG) \
-	do { \
-		struct VFile* vf = VFileFromConstMemory(PROG, strlen(PROG)); \
-		assert_true(lua->load(lua, NULL, vf)); \
-		vf->close(vf); \
-	} while(0)
-
-#define TEST_PROGRAM(PROG) \
-	LOAD_PROGRAM(PROG); \
-	assert_true(lua->run(lua)); \
-
-#define TEST_VALUE(TYPE, NAME, VALUE) \
-	do { \
-		struct mScriptValue val = mSCRIPT_MAKE(TYPE, VALUE); \
-		struct mScriptValue* global = lua->getGlobal(lua, NAME); \
-		assert_non_null(global); \
-		assert_true(global->type->equal(global, &val)); \
-		mScriptValueDeref(global); \
-	} while(0)
 
 M_TEST_SUITE_SETUP(mScriptStdlib) {
 	if (mSCRIPT_ENGINE_LUA->init) {
@@ -100,16 +82,48 @@ M_TEST_DEFINE(callbacks) {
 
 	TEST_VALUE(S32, "val", 0);
 
-	mScriptContextTriggerCallback(&context, "test");
+	mScriptContextTriggerCallback(&context, "test", NULL);
 	TEST_VALUE(S32, "val", 1);
 
-	mScriptContextTriggerCallback(&context, "test");
+	mScriptContextTriggerCallback(&context, "test", NULL);
 	TEST_VALUE(S32, "val", 2);
 
 	TEST_PROGRAM("callbacks:remove(id)");
 
-	mScriptContextTriggerCallback(&context, "test");
+	mScriptContextTriggerCallback(&context, "test", NULL);
 	TEST_VALUE(S32, "val", 2);
+
+	mScriptContextDeinit(&context);
+}
+
+M_TEST_DEFINE(oneshot) {
+	SETUP_LUA;
+
+	TEST_PROGRAM(
+		"val = 0\n"
+		"function cb()\n"
+		"	val = val + 1\n"
+		"end\n"
+		"id = callbacks:oneshot('test', cb)\n"
+		"assert(id)"
+	);
+
+	TEST_VALUE(S32, "val", 0);
+
+	mScriptContextTriggerCallback(&context, "test", NULL);
+	TEST_VALUE(S32, "val", 1);
+
+	mScriptContextTriggerCallback(&context, "test", NULL);
+	TEST_VALUE(S32, "val", 1);
+
+	TEST_PROGRAM(
+		"id = callbacks:oneshot('test', cb)\n"
+		"assert(id)\n"
+		"callbacks:remove(id)"
+	);
+
+	mScriptContextTriggerCallback(&context, "test", NULL);
+	TEST_VALUE(S32, "val", 1);
 
 	mScriptContextDeinit(&context);
 }
@@ -118,4 +132,5 @@ M_TEST_SUITE_DEFINE_SETUP_TEARDOWN(mScriptStdlib,
 	cmocka_unit_test(bitMask),
 	cmocka_unit_test(bitUnmask),
 	cmocka_unit_test(callbacks),
+	cmocka_unit_test(oneshot),
 )

@@ -17,8 +17,10 @@ struct mScriptFileInfo {
 };
 
 struct mScriptCallbackInfo {
+	struct mScriptValue* fn;
 	const char* callback;
-	size_t id;
+	uint32_t id;
+	bool oneshot;
 };
 
 static void _engineContextDestroy(void* ctx) {
@@ -56,13 +58,28 @@ static void _contextFindForFile(const char* key, void* value, void* user) {
 	}
 }
 
+static void _freeTable(void* data) {
+	struct Table* table = data;
+
+	struct TableIterator iter;
+	if (TableIteratorStart(table, &iter)) {
+		do {
+			struct mScriptCallbackInfo* info = TableIteratorGetValue(table, &iter);
+			mScriptValueDeref(info->fn);
+		} while (TableIteratorNext(table, &iter));
+	}
+
+	TableDeinit(table);
+	free(table);
+}
+
 void mScriptContextInit(struct mScriptContext* context) {
 	HashTableInit(&context->rootScope, 0, (void (*)(void*)) mScriptValueDeref);
 	HashTableInit(&context->engines, 0, _engineContextDestroy);
 	mScriptListInit(&context->refPool, 0);
 	TableInit(&context->weakrefs, 0, (void (*)(void*)) mScriptValueDeref);
 	context->nextWeakref = 1;
-	HashTableInit(&context->callbacks, 0, (void (*)(void*)) mScriptValueDeref);
+	HashTableInit(&context->callbacks, 0, _freeTable);
 	TableInit(&context->callbackId, 0, free);
 	context->nextCallbackId = 1;
 	context->constants = NULL;
@@ -71,8 +88,8 @@ void mScriptContextInit(struct mScriptContext* context) {
 
 void mScriptContextDeinit(struct mScriptContext* context) {
 	HashTableDeinit(&context->rootScope);
-	HashTableDeinit(&context->weakrefs);
 	mScriptContextDrainPool(context);
+	HashTableDeinit(&context->weakrefs);
 	mScriptListDeinit(&context->refPool);
 	HashTableDeinit(&context->callbacks);
 	TableDeinit(&context->callbackId);
@@ -84,14 +101,6 @@ void mScriptContextFillPool(struct mScriptContext* context, struct mScriptValue*
 	if (value->refs == mSCRIPT_VALUE_UNREF) {
 		return;
 	}
-	switch (value->type->base) {
-	case mSCRIPT_TYPE_SINT:
-	case mSCRIPT_TYPE_UINT:
-	case mSCRIPT_TYPE_FLOAT:
-		return;
-	default:
-		break;
-	}
 
 	struct mScriptValue* poolEntry = mScriptListAppend(&context->refPool);
 	poolEntry->type = mSCRIPT_TYPE_MS_WRAPPER;
@@ -102,9 +111,12 @@ void mScriptContextFillPool(struct mScriptContext* context, struct mScriptValue*
 void mScriptContextDrainPool(struct mScriptContext* context) {
 	size_t i;
 	for (i = 0; i < mScriptListSize(&context->refPool); ++i) {
-		struct mScriptValue* value = mScriptValueUnwrap(mScriptListGetPointer(&context->refPool, i));
-		if (value) {
+		struct mScriptValue* value = mScriptListGetPointer(&context->refPool, i);
+		if (value->type->base == mSCRIPT_TYPE_WRAPPER) {
+			value = mScriptValueUnwrap(value);
 			mScriptValueDeref(value);
+		} else if (value->type == mSCRIPT_TYPE_MS_WEAKREF) {
+			mScriptContextClearWeakref(context, value->value.u32);
 		}
 	}
 	mScriptListClear(&context->refPool);
@@ -201,43 +213,68 @@ void mScriptContextClearWeakref(struct mScriptContext* context, uint32_t weakref
 	TableRemove(&context->weakrefs, weakref);
 }
 
-void mScriptContextTriggerCallback(struct mScriptContext* context, const char* callback) {
-	struct mScriptValue* list = HashTableLookup(&context->callbacks, callback);
-	if (!list) {
-		return;
-	}
-	size_t i;
-	for (i = 0; i < mScriptListSize(list->value.list); ++i) {
-		struct mScriptFrame frame;
-		struct mScriptValue* fn = mScriptListGetPointer(list->value.list, i);
-		if (!fn->type) {
-			continue;
-		}
-		mScriptFrameInit(&frame);
-		if (fn->type->base == mSCRIPT_TYPE_WRAPPER) {
-			fn = mScriptValueUnwrap(fn);
-		}
-		mScriptInvoke(fn, &frame);
-		mScriptFrameDeinit(&frame);
-	}
+void mScriptContextDisownWeakref(struct mScriptContext* context, uint32_t weakref) {
+	struct mScriptValue* poolEntry = mScriptListAppend(&context->refPool);
+	poolEntry->type = mSCRIPT_TYPE_MS_WEAKREF;
+	poolEntry->value.u32 = weakref;
+	poolEntry->refs = mSCRIPT_VALUE_UNREF;
 }
 
-uint32_t mScriptContextAddCallback(struct mScriptContext* context, const char* callback, struct mScriptValue* fn) {
+void mScriptContextTriggerCallback(struct mScriptContext* context, const char* callback, struct mScriptList* args) {
+	struct Table* table = HashTableLookup(&context->callbacks, callback);
+	if (!table) {
+		return;
+	}
+	struct TableIterator iter;
+	if (!TableIteratorStart(table, &iter)) {
+		return;
+	}
+
+	struct UInt32List oneshots;
+	UInt32ListInit(&oneshots, 0);
+	do {
+		struct mScriptFrame frame;
+		struct mScriptCallbackInfo* info = TableIteratorGetValue(table, &iter);
+		mScriptFrameInit(&frame);
+		if (args) {
+			mScriptListCopy(&frame.arguments, args);
+		}
+		mScriptInvoke(info->fn, &frame);
+		mScriptFrameDeinit(&frame);
+
+		if (info->oneshot) {
+			*UInt32ListAppend(&oneshots) = info->id;
+		}
+	} while (TableIteratorNext(table, &iter));
+
+	size_t i;
+	for (i = 0; i < UInt32ListSize(&oneshots); ++i) {
+		mScriptContextRemoveCallback(context, *UInt32ListGetPointer(&oneshots, i));
+	}
+	UInt32ListDeinit(&oneshots);
+}
+
+static uint32_t mScriptContextAddCallbackInternal(struct mScriptContext* context, const char* callback, struct mScriptValue* fn, bool oneshot) {
 	if (fn->type->base != mSCRIPT_TYPE_FUNCTION) {
 		return 0;
 	}
-	struct mScriptValue* list = HashTableLookup(&context->callbacks, callback);
-	if (!list) {
-		list = mScriptValueAlloc(mSCRIPT_TYPE_MS_LIST);
-		HashTableInsert(&context->callbacks, callback, list);
+	struct Table* table = HashTableLookup(&context->callbacks, callback);
+	if (!table) {
+		table = calloc(1, sizeof(*table));
+		TableInit(table, 0, NULL);
+		HashTableInsert(&context->callbacks, callback, table);
 	}
 	struct mScriptCallbackInfo* info = malloc(sizeof(*info));
 	// Steal the string from the table key, since it's guaranteed to outlive this struct
 	struct TableIterator iter;
 	HashTableIteratorLookup(&context->callbacks, &iter, callback);
 	info->callback = HashTableIteratorGetKey(&context->callbacks, &iter);
-	info->id = mScriptListSize(list->value.list);
-	mScriptValueWrap(fn, mScriptListAppend(list->value.list));
+	info->oneshot = oneshot;
+	if (fn->type->base == mSCRIPT_TYPE_WRAPPER) {
+		fn = mScriptValueUnwrap(fn);
+	}
+	info->fn = fn;
+	mScriptValueRef(fn);
 	while (true) {
 		uint32_t id = context->nextCallbackId;
 		++context->nextCallbackId;
@@ -245,8 +282,19 @@ uint32_t mScriptContextAddCallback(struct mScriptContext* context, const char* c
 			continue;
 		}
 		TableInsert(&context->callbackId, id, info);
-		return id;
+		info->id = id;
+		break;
 	}
+	TableInsert(table, info->id, info);
+	return info->id;
+}
+
+uint32_t mScriptContextAddCallback(struct mScriptContext* context, const char* callback, struct mScriptValue* fn) {
+	return mScriptContextAddCallbackInternal(context, callback, fn, false);
+}
+
+uint32_t mScriptContextAddOneshot(struct mScriptContext* context, const char* callback, struct mScriptValue* fn) {
+	return mScriptContextAddCallbackInternal(context, callback, fn, true);
 }
 
 void mScriptContextRemoveCallback(struct mScriptContext* context, uint32_t cbid) {
@@ -254,16 +302,13 @@ void mScriptContextRemoveCallback(struct mScriptContext* context, uint32_t cbid)
 	if (!info) {
 		return;
 	}
-	struct mScriptValue* list = HashTableLookup(&context->callbacks, info->callback);
-	if (!list) {
+	struct Table* table = HashTableLookup(&context->callbacks, info->callback);
+	if (!table) {
 		return;
 	}
-	if (info->id >= mScriptListSize(list->value.list)) {
-		return;
-	}
-	struct mScriptValue* fn = mScriptValueUnwrap(mScriptListGetPointer(list->value.list, info->id));
-	mScriptValueDeref(fn);
-	mScriptListGetPointer(list->value.list, info->id)->type = NULL;
+	mScriptValueDeref(info->fn);
+	TableRemove(table, cbid);
+	TableRemove(&context->callbackId, cbid);
 }
 
 void mScriptContextExportConstants(struct mScriptContext* context, const char* nspace, struct mScriptKVPair* constants) {
@@ -311,6 +356,7 @@ void mScriptEngineExportDocNamespace(struct mScriptEngineContext* ctx, const cha
 		struct mScriptValue* key = mScriptStringCreateFromUTF8(values[i].key);
 		mScriptTableInsert(table, key, values[i].value);
 		mScriptValueDeref(key);
+		mScriptValueDeref(values[i].value);
 	}
 	HashTableInsert(&ctx->docroot, nspace, table);
 }

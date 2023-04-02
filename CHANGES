@@ -1,7 +1,48 @@
 0.11.0: (Future)
 Features:
+ - Scripting: New `input` API for getting raw keyboard/mouse/controller state
+ - Scripting: New `storage` API for saving data for a script, e.g. settings
  - New unlicensed GB mappers: NT (older types 1 and 2), Li Cheng, GGB-81
  - Debugger: Add range watchpoints
+Emulation fixes:
+ - GB Video: Implement DMG-style sprite ordering
+ - GBA Audio: Fix improperly deserializing GB audio registers (fixes mgba.io/i/2793)
+ - GBA Audio: Clear GB audio state when disabled
+ - GBA Memory: Make VRAM access stalls only apply to BG RAM
+ - GBA Overrides: Fix saving in PMD:RRT (JP) (fixes mgba.io/i/2862)
+ - GBA SIO: Fix SIOCNT SI pin value after attaching player 2 (fixes mgba.io/i/2805)
+ - GBA SIO: Fix unconnected normal mode SIOCNT SI bit (fixes mgba.io/i/2810)
+ - GBA SIO: Normal mode transfers with no clock should not finish (fixes mgba.io/i/2811)
+ - GBA Timers: Cascading timers don't tick when disabled (fixes mgba.io/i/2812)
+ - GBA Video: Disable BG target 1 blending when OBJ blending (fixes mgba.io/i/2722)
+Other fixes:
+ - Core: Allow sending thread requests to a crashed core (fixes mgba.io/i/2784)
+ - Qt: Fix crash when attempting to use OpenGL 2.1 to 3.1 (fixes mgba.io/i/2794)
+ - Qt: Disable sync while running scripts from main thread (fixes mgba.io/i/2738)
+ - Qt: Fix savestate preview sizes with different scales (fixes mgba.io/i/2560)
+ - Qt: Properly cap number of attached players by platform (fixes mgba.io/i/2807)
+ - Qt: Disable attempted linking betwen incompatible platforms (fixes mgba.io/i/2702)
+ - Qt: Fix modifier key names in shortcut editor (fixes mgba.io/i/2817)
+ - Qt: Fix a handful of edge cases with graphics viewers (fixes mgba.io/i/2827)
+ - Qt: Fix full-buffer rewind
+ - Qt: Fix crash if loading a shader fails
+ - Qt: Fix black screen when starting with a game (fixes mgba.io/i/2781)
+ - Qt: Fix OSD on modern macOS (fixes mgba.io/i/2736)
+ - Qt: Fix checked state of mute menu option at load (fixes mgba.io/i/2701)
+ - Scripting: Fix receiving packets for client sockets
+ - Scripting: Fix empty receive calls returning unknown error on Windows
+ - Scripting: Return proper callback ID from socket.add
+Misc:
+ - Core: Handle relative paths for saves, screenshots, etc consistently (fixes mgba.io/i/2826)
+ - GB Serialize: Add missing savestate support for MBC6 and NT (newer)
+ - GBA: Improve detection of valid ELF ROMs
+ - Qt: Include wayland QPA in AppImage (fixes mgba.io/i/2796)
+ - Qt: Stop eating boolean action key events (fixes mgba.io/i/2636)
+ - Qt: Automatically change video file extension as appropriate
+ - Qt: Swap P1 and other player's save if P1 loaded it first (closes mgba.io/i/2750)
+ - Scripting: Add `callbacks:oneshot` for single-call callbacks
+
+0.10.1: (2023-01-10)
 Emulation fixes:
  - GB Audio: Fix channels 1/2 not playing when resetting volume (fixes mgba.io/i/2614)
  - GB Audio: Fix channel 3 volume being changed between samples (fixes mgba.io/i/1896)
@@ -11,21 +52,20 @@ Emulation fixes:
  - GB Serialize: Don't write BGP/OBP when loading SCGB state (fixes mgba.io/i/2694)
  - GB SIO: Further fix bidirectional transfer starting
  - GBA: Fix resetting key IRQ state (fixes mgba.io/i/2716)
+ - GBA BIOS: Include timing in degenerate ArcTan2 cases (fixes mgba.io/i/2763)
  - GBA Video: Ignore disabled backgrounds as OBJ blend target (fixes mgba.io/i/2489)
- - GBA Video: Disable BG target 1 blending when OBJ blending (fixes mgba.io/i/2722)
 Other fixes:
  - GBA: Fix forceskip BIOS logic for multiboot ROMs (fixes mgba.io/i/2753)
  - GBA Cheats: Fix issues detecting unencrypted cheats (fixes mgba.io/i/2724)
  - Qt: Manually split filename to avoid overzealous splitting (fixes mgba.io/i/2681)
- - Qt: Expand criteria for tag branch names (fixes mgba.io/i/2679)
  - Qt: Fix scanning specific e-Reader dotcodes (fixes mgba.io/i/2693)
  - Qt: Don't re-enable sync if GBA link modes aren't the same (fixes mgba.io/i/2044)
  - Qt: Improve handling of multiplayer syncing (fixes mgba.io/i/2720)
+ - Qt: Fix initializing update revision info
+ - Qt: Redo stable branch detection heuristic (fixes mgba.io/i/2679)
  - Res: Fix species name location in Ruby/Sapphire revs 1/2 (fixes mgba.io/i/2685)
  - VFS: Fix minizip write returning 0 on success instead of size
 Misc:
- - GB Serialize: Add missing savestate support for MBC6 and NT (newer)
- - GBA: Improve detection of valid ELF ROMs
  - macOS: Add category to plist (closes mgba.io/i/2691)
  - macOS: Fix modern build with libepoxy (fixes mgba.io/i/2700)
  - Qt: Keep track of current palette preset name (fixes mgba.io/i/2680)

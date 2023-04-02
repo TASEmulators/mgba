@@ -14,6 +14,9 @@ struct TestA {
 	int32_t i2;
 	int8_t b8;
 	int16_t hUnaligned;
+	char str[6];
+	struct mScriptValue table;
+	struct mScriptList list;
 	int32_t (*ifn0)(struct TestA*);
 	int32_t (*ifn1)(struct TestA*, int);
 	void (*vfn0)(struct TestA*);
@@ -41,6 +44,14 @@ struct TestE {
 
 struct TestF {
 	int* ref;
+};
+
+struct TestG {
+	const char* name;
+	int64_t s;
+	uint64_t u;
+	double f;
+	const char* c;
 };
 
 static int32_t testAi0(struct TestA* a) {
@@ -80,6 +91,26 @@ static void testDeinit(struct TestF* f) {
 	++*f->ref;
 }
 
+static void testSetS(struct TestG* g, const char* name, int64_t val) {
+	g->name = name;
+	g->s = val;
+}
+
+static void testSetU(struct TestG* g, const char* name, uint64_t val) {
+	g->name = name;
+	g->u = val;
+}
+
+static void testSetF(struct TestG* g, const char* name, double val) {
+	g->name = name;
+	g->f = val;
+}
+
+static void testSetC(struct TestG* g, const char* name, const char* val) {
+	g->name = name;
+	g->c = val;
+}
+
 #define MEMBER_A_DOCSTRING "Member a"
 
 mSCRIPT_DECLARE_STRUCT(TestA);
@@ -103,6 +134,9 @@ mSCRIPT_DEFINE_STRUCT(TestA)
 	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, S32, i2)
 	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, S8, b8)
 	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, S16, hUnaligned)
+	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, CHARP, str)
+	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, TABLE, table)
+	mSCRIPT_DEFINE_STRUCT_MEMBER(TestA, LIST, list)
 	mSCRIPT_DEFINE_STRUCT_METHOD(TestA, ifn0)
 	mSCRIPT_DEFINE_STRUCT_METHOD(TestA, ifn1)
 	mSCRIPT_DEFINE_STRUCT_METHOD(TestA, icfn0)
@@ -151,6 +185,19 @@ mSCRIPT_DEFINE_STRUCT(TestF)
 	mSCRIPT_DEFINE_STRUCT_DEINIT(TestF)
 mSCRIPT_DEFINE_END;
 
+mSCRIPT_DECLARE_STRUCT(TestG);
+mSCRIPT_DECLARE_STRUCT_VOID_METHOD(TestG, setS, testSetS, 2, CHARP, name, S64, value);
+mSCRIPT_DECLARE_STRUCT_VOID_METHOD(TestG, setU, testSetU, 2, CHARP, name, U64, value);
+mSCRIPT_DECLARE_STRUCT_VOID_METHOD(TestG, setF, testSetF, 2, CHARP, name, F64, value);
+mSCRIPT_DECLARE_STRUCT_VOID_METHOD(TestG, setC, testSetC, 2, CHARP, name, CHARP, value);
+
+mSCRIPT_DEFINE_STRUCT(TestG)
+	mSCRIPT_DEFINE_STRUCT_DEFAULT_SET(TestG, setS)
+	mSCRIPT_DEFINE_STRUCT_DEFAULT_SET(TestG, setU)
+	mSCRIPT_DEFINE_STRUCT_DEFAULT_SET(TestG, setF)
+	mSCRIPT_DEFINE_STRUCT_DEFAULT_SET(TestG, setC)
+mSCRIPT_DEFINE_END;
+
 M_TEST_DEFINE(testALayout) {
 	struct mScriptTypeClass* cls = mSCRIPT_TYPE_MS_S(TestA)->details.cls;
 	assert_false(cls->init);
@@ -186,6 +233,27 @@ M_TEST_DEFINE(testALayout) {
 	assert_null(member->docstring);
 	assert_ptr_equal(member->type, mSCRIPT_TYPE_MS_S16);
 	assert_int_not_equal(member->offset, sizeof(int32_t) * 2 + 1);
+
+	member = HashTableLookup(&cls->instanceMembers, "str");
+	assert_non_null(member);
+	assert_string_equal(member->name, "str");
+	assert_null(member->docstring);
+	assert_ptr_equal(member->type, mSCRIPT_TYPE_MS_CHARP);
+	assert_int_equal(member->offset, &((struct TestA*) 0)->str);
+
+	member = HashTableLookup(&cls->instanceMembers, "table");
+	assert_non_null(member);
+	assert_string_equal(member->name, "table");
+	assert_null(member->docstring);
+	assert_ptr_equal(member->type, mSCRIPT_TYPE_MS_TABLE);
+	assert_int_equal(member->offset, &((struct TestA*) 0)->table);
+
+	member = HashTableLookup(&cls->instanceMembers, "list");
+	assert_non_null(member);
+	assert_string_equal(member->name, "list");
+	assert_null(member->docstring);
+	assert_ptr_equal(member->type, mSCRIPT_TYPE_MS_LIST);
+	assert_int_equal(member->offset, &((struct TestA*) 0)->list);
 
 	member = HashTableLookup(&cls->instanceMembers, "unknown");
 	assert_null(member);
@@ -280,6 +348,14 @@ M_TEST_DEFINE(testAGet) {
 		.hUnaligned = 4
 	};
 
+	mScriptListInit(&s.list, 1);
+	*mScriptListAppend(&s.list) = mSCRIPT_MAKE_S32(5);
+
+	s.table.type = mSCRIPT_TYPE_MS_TABLE;
+	s.table.type->alloc(&s.table);
+
+	strcpy(s.str, "test");
+
 	struct mScriptValue sval = mSCRIPT_MAKE_S(TestA, &s);
 	struct mScriptValue val;
 	struct mScriptValue compare;
@@ -300,7 +376,37 @@ M_TEST_DEFINE(testAGet) {
 	assert_true(mScriptObjectGet(&sval, "hUnaligned", &val));
 	assert_true(compare.type->equal(&compare, &val));
 
+	compare = mSCRIPT_MAKE_CHARP("test");
+	assert_true(mScriptObjectGet(&sval, "str", &val));
+	assert_true(compare.type->equal(&compare, &val));
+
+	compare = mSCRIPT_MAKE_S32(5);
+	assert_true(mScriptObjectGet(&sval, "list", &val));
+	assert_ptr_equal(val.type, mSCRIPT_TYPE_MS_LIST);
+	assert_int_equal(mScriptListSize(val.value.list), 1);
+	assert_true(compare.type->equal(&compare, mScriptListGetPointer(val.value.list, 0)));
+
+	*mScriptListAppend(&s.list) = mSCRIPT_MAKE_S32(6);
+	compare = mSCRIPT_MAKE_S32(6);
+	assert_int_equal(mScriptListSize(val.value.list), 2);
+	assert_true(compare.type->equal(&compare, mScriptListGetPointer(val.value.list, 1)));
+
+	struct mScriptValue* ival = &val;
+	assert_true(mScriptObjectGet(&sval, "table", &val));
+	if (val.type->base == mSCRIPT_TYPE_WRAPPER) {
+		ival = mScriptValueUnwrap(&val);
+	}
+	assert_ptr_equal(ival->type, mSCRIPT_TYPE_MS_TABLE);
+	assert_int_equal(mScriptTableSize(ival), 0);
+	compare = mSCRIPT_MAKE_S32(7);
+	mScriptTableInsert(&s.table, &compare, &compare);
+	assert_int_equal(mScriptTableSize(&s.table), 1);
+	assert_int_equal(mScriptTableSize(ival), 1);
+
 	assert_false(mScriptObjectGet(&sval, "unknown", &val));
+
+	mScriptListDeinit(&s.list);
+	mSCRIPT_TYPE_MS_TABLE->free(&s.table);
 
 	assert_true(cls->init);
 	mScriptClassDeinit(cls);
@@ -967,6 +1073,67 @@ M_TEST_DEFINE(testFDeinit) {
 	assert_false(cls->init);
 }
 
+M_TEST_DEFINE(testGSet) {
+	struct mScriptTypeClass* cls = mSCRIPT_TYPE_MS_S(TestG)->details.cls;
+
+	struct TestG s = {
+	};
+
+	assert_int_equal(s.s, 0);
+	assert_int_equal(s.u, 0);
+	assert_float_equal(s.f, 0, 0);
+	assert_null(s.c);
+
+	struct mScriptValue sval = mSCRIPT_MAKE_S(TestG, &s);
+	struct mScriptValue val;
+	struct mScriptValue* pval;
+
+	val = mSCRIPT_MAKE_S64(1);
+	assert_true(mScriptObjectSet(&sval, "a", &val));
+	assert_int_equal(s.s, 1);
+	assert_string_equal(s.name, "a");
+
+	val = mSCRIPT_MAKE_U64(2);
+	assert_true(mScriptObjectSet(&sval, "b", &val));
+	assert_int_equal(s.u, 2);
+	assert_string_equal(s.name, "b");
+
+	val = mSCRIPT_MAKE_F64(1.5);
+	assert_true(mScriptObjectSet(&sval, "c", &val));
+	assert_float_equal(s.f, 1.5, 0);
+	assert_string_equal(s.name, "c");
+
+	val = mSCRIPT_MAKE_CHARP("hello");
+	assert_true(mScriptObjectSet(&sval, "d", &val));
+	assert_string_equal(s.c, "hello");
+	assert_string_equal(s.name, "d");
+
+	val = mSCRIPT_MAKE_S32(3);
+	assert_true(mScriptObjectSet(&sval, "a", &val));
+	assert_int_equal(s.s, 3);
+
+	val = mSCRIPT_MAKE_S16(4);
+	assert_true(mScriptObjectSet(&sval, "a", &val));
+	assert_int_equal(s.s, 4);
+
+	val = mSCRIPT_MAKE_S8(5);
+	assert_true(mScriptObjectSet(&sval, "a", &val));
+	assert_int_equal(s.s, 5);
+
+	val = mSCRIPT_MAKE_BOOL(false);
+	assert_true(mScriptObjectSet(&sval, "a", &val));
+	assert_int_equal(s.u, 0);
+
+	pval = mScriptStringCreateFromASCII("goodbye");
+	assert_true(mScriptObjectSet(&sval, "a", pval));
+	assert_string_equal(s.c, "goodbye");
+	mScriptValueDeref(pval);
+
+	assert_true(cls->init);
+	mScriptClassDeinit(cls);
+	assert_false(cls->init);
+}
+
 M_TEST_SUITE_DEFINE(mScriptClasses,
 	cmocka_unit_test(testALayout),
 	cmocka_unit_test(testASignatures),
@@ -982,4 +1149,5 @@ M_TEST_SUITE_DEFINE(mScriptClasses,
 	cmocka_unit_test(testDSet),
 	cmocka_unit_test(testEGet),
 	cmocka_unit_test(testFDeinit),
+	cmocka_unit_test(testGSet),
 )

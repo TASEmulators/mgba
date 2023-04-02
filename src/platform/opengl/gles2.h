@@ -70,6 +70,7 @@ struct mGLES2Shader {
 	GLuint texLocation;
 	GLuint texSizeLocation;
 	GLuint positionLocation;
+	GLuint outputSizeLocation;
 
 	struct mGLES2Uniform* uniforms;
 	size_t nUniforms;
@@ -78,8 +79,13 @@ struct mGLES2Shader {
 struct mGLES2Context {
 	struct VideoBackend d;
 
-	GLuint tex;
+	GLuint tex[VIDEO_LAYER_MAX];
 	GLuint vbo;
+
+	struct mRectangle layerDims[VIDEO_LAYER_MAX];
+	struct mSize imageSizes[VIDEO_LAYER_MAX];
+	unsigned width;
+	unsigned height;
 
 	struct mGLES2Shader initialShader;
 	struct mGLES2Shader finalShader;
