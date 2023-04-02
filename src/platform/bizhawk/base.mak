@@ -88,11 +88,11 @@ SRCS = \
 	$(ROOT_DIR)/util/gbk-table.c \
 	$(ROOT_DIR)/util/gui.c \
 	$(ROOT_DIR)/util/hash.c \
+	$(ROOT_DIR)/util/image/png-io.c \
 	$(ROOT_DIR)/util/patch-fast.c \
 	$(ROOT_DIR)/util/patch-ips.c \
 	$(ROOT_DIR)/util/patch-ups.c \
 	$(ROOT_DIR)/util/patch.c \
-	$(ROOT_DIR)/util/png-io.c \
 	$(ROOT_DIR)/util/ring-fifo.c \
 	$(ROOT_DIR)/util/string.c \
 	$(ROOT_DIR)/util/table.c \

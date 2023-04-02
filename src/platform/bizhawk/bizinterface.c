@@ -486,14 +486,14 @@ struct MemoryAreas
 EXP void BizGetMemoryAreas(bizctx* ctx, struct MemoryAreas* dst)
 {
 	size_t sizeOut;
-	dst->bios = ctx->core->getMemoryBlock(ctx->core, REGION_BIOS, &sizeOut);
-	dst->wram = ctx->core->getMemoryBlock(ctx->core, REGION_WORKING_RAM, &sizeOut);
-	dst->iwram = ctx->core->getMemoryBlock(ctx->core, REGION_WORKING_IRAM, &sizeOut);
+	dst->bios = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_BIOS, &sizeOut);
+	dst->wram = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_EWRAM, &sizeOut);
+	dst->iwram = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_IWRAM, &sizeOut);
 	dst->mmio = ctx->gba->memory.io;
-	dst->palram = ctx->core->getMemoryBlock(ctx->core, REGION_PALETTE_RAM, &sizeOut);
-	dst->vram = ctx->core->getMemoryBlock(ctx->core, REGION_VRAM, &sizeOut);
-	dst->oam = ctx->core->getMemoryBlock(ctx->core, REGION_OAM, &sizeOut);
-	dst->rom = ctx->core->getMemoryBlock(ctx->core, REGION_CART0, &sizeOut);
+	dst->palram = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_PALETTE_RAM, &sizeOut);
+	dst->vram = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_VRAM, &sizeOut);
+	dst->oam = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_OAM, &sizeOut);
+	dst->rom = ctx->core->getMemoryBlock(ctx->core, GBA_REGION_ROM0, &sizeOut);
 	// Return the buffer that BizHawk hands to mGBA for storing savedata.
 	// getMemoryBlock is avoided because mGBA doesn't always know save type at startup,
 	// so getMemoryBlock may return nothing until the save type is detected.
