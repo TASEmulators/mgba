@@ -97,6 +97,7 @@ SRCS = \
 	$(ROOT_DIR)/util/string.c \
 	$(ROOT_DIR)/util/table.c \
 	$(ROOT_DIR)/util/text-codec.c \
+	$(ROOT_DIR)/util/vector.c \
 	$(ROOT_DIR)/util/vfs.c \
 	$(ROOT_DIR)/util/vfs/vfs-mem.c \
 	$(ROOT_DIR)/platform/bizhawk/bizinterface.c \
@@ -113,7 +114,7 @@ $(OBJ_DIR)/%.o: $(ROOT_DIR)/%.c
 	@$(CC) -c -o $@ $< $(CCFLAGS)
 
 $(TARGET): $(OBJS)
-	@$(CC) -o $@ $(LDFLAGS) $(OBJS)
+	@$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
 clean:
 	@$(RM) -rf $(OBJ_DIR)
