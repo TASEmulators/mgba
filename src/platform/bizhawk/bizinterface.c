@@ -216,7 +216,12 @@ static void watchpoint_entry(struct mDebuggerModule* module, enum mDebuggerEntry
 {
 	bizctx* ctx = container_of(module, bizctx, module);
 	if (reason == DEBUGGER_ENTER_WATCHPOINT && info && ctx->mem_callback)
+	{
+		module->entered = NULL; // don't allow this callback to be re-entered
 		ctx->mem_callback(info->address, info->type.wp.accessType, info->type.wp.oldValue, info->type.wp.newValue);
+		module->entered = watchpoint_entry;
+	}
+
 	module->isPaused = false;
 	module->needsCallback = ctx->trace_callback || ctx->exec_callback;
 }
