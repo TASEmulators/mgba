@@ -48,7 +48,11 @@ static const int _ytab[2][12] = {
   {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 };
 
+#ifdef _WIN32
+errno_t _localtime64_s(struct tm *tmbuf, const time_t *timer) {
+#else
 struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
+#endif
   time_t time = *timer;
   unsigned long dayclock, dayno;
   int year = EPOCH_YR;
@@ -73,7 +77,11 @@ struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
   }
   tmbuf->tm_mday = dayno + 1;
   tmbuf->tm_isdst = 0;
+#ifdef _WIN32
+  return 0;
+#else
   return tmbuf;
+#endif
 }
 
 #ifdef _WIN32

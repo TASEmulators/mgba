@@ -19,7 +19,7 @@
 static_assert(sizeof(bool) == 1, "Wrong bool size!");
 static_assert(sizeof(color_t) == 2, "Wrong color_t size!");
 static_assert(sizeof(enum mWatchpointType) == 4, "Wrong mWatchpointType size!");
-static_assert(sizeof(enum SavedataType) == 4, "Wrong SavedataType size!");
+static_assert(sizeof(enum GBASavedataType) == 4, "Wrong GBASavedataType size!");
 static_assert(sizeof(enum GBAHardwareDevice) == 4, "Wrong GBAHardwareDevice size!");
 static_assert(sizeof(ssize_t) == 8, "Wrong ssize_t size!");
 static_assert(sizeof(void*) == 8, "Wrong pointer size!");
@@ -63,6 +63,8 @@ typedef struct
 	struct mRTCSource rtcsource;
 	struct GBALuminanceSource lumasource;
 	struct mDebugger debugger;
+	struct mDebuggerModule module;
+	bool attached;
 	struct GBACartridgeOverride override;
 	int16_t tiltx;
 	int16_t tilty;
@@ -150,6 +152,13 @@ static void resetinternal(bizctx* ctx)
 
 EXP void BizDestroy(bizctx* ctx)
 {
+	if (ctx->attached)
+	{
+		ctx->core->detachDebugger(ctx->core);
+		mDebuggerDetachModule(&ctx->debugger, &ctx->module);
+		mDebuggerDeinit(&ctx->debugger);
+	}
+
 	ctx->core->deinit(ctx->core);
 	free(ctx->rom);
 	free(ctx);
@@ -157,22 +166,22 @@ EXP void BizDestroy(bizctx* ctx)
 
 typedef struct
 {
-	enum SavedataType savetype;
+	enum GBASavedataType savetype;
 	enum GBAHardwareDevice hardware;
 	uint32_t idleLoop;
 	bool vbaBugCompat;
 	bool detectPokemonRomHacks;
 } overrideinfo;
 
-void exec_hook(struct mDebugger* debugger)
+void exec_hook(struct mDebuggerModule* module)
 {
-	bizctx* ctx = container_of(debugger, bizctx, debugger);
+	bizctx* ctx = container_of(module, bizctx, module);
 	if (ctx->trace_callback)
 	{
 		char trace[1024];
 		trace[sizeof(trace) - 1] = '\0';
 		size_t traceSize = sizeof(trace) - 2;
-		debugger->platform->trace(debugger->platform, trace, &traceSize);
+		ctx->debugger.platform->trace(ctx->debugger.platform, trace, &traceSize);
 		if (traceSize + 1 <= sizeof(trace)) {
 			trace[traceSize] = '\n';
 			trace[traceSize + 1] = '\0';
@@ -180,7 +189,7 @@ void exec_hook(struct mDebugger* debugger)
 		ctx->trace_callback(trace);
 	}
 	if (ctx->exec_callback)
-		ctx->exec_callback(_ARMPCAddress(debugger->core->cpu));
+		ctx->exec_callback(_ARMPCAddress(ctx->core->cpu));
 }
 
 EXP void BizSetInputCallback(bizctx* ctx, void(*callback)(void))
@@ -203,12 +212,13 @@ EXP void BizSetMemCallback(bizctx* ctx, void(*callback)(uint32_t addr, enum mWat
 	ctx->mem_callback = callback;
 }
 
-static void watchpoint_entry(struct mDebugger* debugger, enum mDebuggerEntryReason reason, struct mDebuggerEntryInfo* info)
+static void watchpoint_entry(struct mDebuggerModule* module, enum mDebuggerEntryReason reason, struct mDebuggerEntryInfo* info)
 {
-	bizctx* ctx = container_of(debugger, bizctx, debugger);
+	bizctx* ctx = container_of(module, bizctx, module);
 	if (reason == DEBUGGER_ENTER_WATCHPOINT && info && ctx->mem_callback)
 		ctx->mem_callback(info->address, info->type.wp.accessType, info->type.wp.oldValue, info->type.wp.newValue);
-	debugger->state = ctx->trace_callback || ctx->exec_callback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
+	module->isPaused = false;
+	module->needsCallback = ctx->trace_callback || ctx->exec_callback;
 }
 
 EXP ssize_t BizSetWatchpoint(bizctx* ctx, uint32_t addr, enum mWatchpointType type)
@@ -219,7 +229,7 @@ EXP ssize_t BizSetWatchpoint(bizctx* ctx, uint32_t addr, enum mWatchpointType ty
 		.segment = -1,
 		.type = type
 	};
-	return ctx->debugger.platform->setWatchpoint(ctx->debugger.platform, &watchpoint);
+	return ctx->debugger.platform->setWatchpoint(ctx->debugger.platform, &ctx->module, &watchpoint);
 }
 
 EXP bool BizClearWatchpoint(bizctx* ctx, ssize_t id)
@@ -379,14 +389,14 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 
 		if (isPokemon && !isKnownPokemon)
 		{
-			ctx->override.savetype = SAVEDATA_FLASH1M;
+			ctx->override.savetype = GBA_SAVEDATA_FLASH1M;
 			ctx->override.hardware = HW_RTC;
 			ctx->override.vbaBugCompat = true;
 		}
 		else
 		{
 			GBAOverrideFind(NULL, &ctx->override); // apply defaults
-			if (overrides->savetype != SAVEDATA_AUTODETECT)
+			if (overrides->savetype != GBA_SAVEDATA_AUTODETECT)
 			{
 				ctx->override.savetype = overrides->savetype;
 			}
@@ -411,9 +421,13 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 		ctx->override.idleLoop = overrides->idleLoop;
 	}
 
+	mDebuggerInit(&ctx->debugger);
+	ctx->module.type = DEBUGGER_CUSTOM;
+	ctx->module.custom = exec_hook;
+	ctx->module.entered = watchpoint_entry;
+	mDebuggerAttachModule(&ctx->debugger, &ctx->module);
 	mDebuggerAttach(&ctx->debugger, ctx->core);
-	ctx->debugger.custom = exec_hook;
-	ctx->debugger.entered = watchpoint_entry;
+	ctx->attached = true;
 
 	resetinternal(ctx);
 
@@ -453,7 +467,8 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	ctx->tiltz = gyroz;
 	ctx->lagged = true;
 
-	ctx->debugger.state = ctx->trace_callback || ctx->exec_callback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
+	ctx->module.needsCallback = ctx->trace_callback || ctx->exec_callback;
+	ctx->debugger.state = ctx->module.needsCallback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
 	mDebuggerRunFrame(&ctx->debugger);
 
 	blit(vbuff, ctx->vbuff, ctx->palette);

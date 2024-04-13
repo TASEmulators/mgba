@@ -23,7 +23,7 @@ PLAT_SRCS += \
 	$(ROOT_DIR)/platform/posix/memory.c
 
 PLAT_FLAGS += \
-	-DHAVE_LOCALE -fvisibility=hidden -fPIC
+	-DHAVE_LOCALE -DHAVE_LOCALTIME_R -fvisibility=hidden -fPIC
 
 TARGET = libmgba.dll.so
 

@@ -24,7 +24,7 @@ PLAT_SRCS += \
 	$(ROOT_DIR)/platform/windows/memory.c
 
 PLAT_FLAGS += \
-	-Wno-format
+	-Wno-format -Wno-inconsistent-dllimport -D_mktime64=biz_mktime64 -D_localtime64_s=biz_localtime64_s
 
 TARGET = mgba.dll
 

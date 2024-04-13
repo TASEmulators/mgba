@@ -1,9 +1,10 @@
 CCFLAGS = \
 	-O3 -fomit-frame-pointer -fexpensive-optimizations -flto \
-	-I../../../../include -I../../.. \
-	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch -std=gnu11 \
-	-DHAVE_LOCALTIME_R -DMINIMAL_CORE=2 -DDISABLE_THREADING \
-	-DM_CORE_GBA -DCOLOR_16_BIT -DMGBA_STANDALONE -DUSE_DEBUGGERS \
+	-I../../../../include -I../../.. -std=gnu11 \
+	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch \
+	-Wno-ignored-optimization-argument -Wno-unknown-warning-option \
+	-DMINIMAL_CORE=2 -DDISABLE_THREADING -DM_CORE_GBA \
+	-DCOLOR_16_BIT -DMGBA_STANDALONE -DENABLE_DEBUGGERS \
 	$(PLAT_FLAGS)
 
 DEST_64 = ../../../../../../Assets/dll
