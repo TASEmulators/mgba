@@ -24,7 +24,7 @@ CXX_GUARD_START
 #include <GLES2/gl2.h>
 #endif
 
-#include "platform/video-backend.h"
+#include <mgba/feature/video-backend.h>
 
 union mGLES2UniformValue {
 	GLfloat f;
@@ -84,12 +84,15 @@ struct mGLES2Context {
 
 	struct mRectangle layerDims[VIDEO_LAYER_MAX];
 	struct mSize imageSizes[VIDEO_LAYER_MAX];
-	unsigned width;
-	unsigned height;
+	int x;
+	int y;
+	int width;
+	int height;
 
 	struct mGLES2Shader initialShader;
 	struct mGLES2Shader finalShader;
 	struct mGLES2Shader interframeShader;
+	struct mGLES2Shader overlayShader;
 
 	struct mGLES2Shader* shaders;
 	size_t nShaders;

@@ -20,6 +20,8 @@
 class QKeyEvent;
 class QTextDocument;
 
+struct VideoBackend;
+
 namespace QGBA {
 
 class CoreController;
@@ -36,11 +38,12 @@ public:
 
 	void setController(std::shared_ptr<CoreController> controller);
 	void setInputController(InputController* controller);
+	void setVideoBackend(VideoBackend* backend);
 
 	bool loadFile(const QString& path);
 	bool load(VFileDevice& vf, const QString& name);
 
-	void event(QObject* obj, QEvent* ev);
+	void scriptingEvent(QObject* obj, QEvent* ev);
 
 	mScriptContext* context() { return &m_scriptContext; }
 	ScriptingTextBufferModel* textBufferModel() const { return m_bufferModel; }
@@ -53,6 +56,7 @@ signals:
 
 public slots:
 	void clearController();
+	void updateVideoScale();
 	void reset();
 	void runCode(const QString& code);
 
@@ -63,6 +67,7 @@ protected:
 
 private slots:
 	void updateGamepad();
+	void attach();
 
 private:
 	void init();
@@ -82,6 +87,7 @@ private:
 	mScriptEngineContext* m_activeEngine = nullptr;
 	QHash<QString, mScriptEngineContext*> m_engines;
 	ScriptingTextBufferModel* m_bufferModel;
+	VideoBackend* m_videoBackend = nullptr;
 
 	mScriptGamepad m_gamepad;
 

@@ -8,9 +8,9 @@
 #include <mgba/core/core.h>
 #include <mgba/internal/debugger/symbols.h>
 #include <mgba/internal/gb/cheats.h>
+#include <mgba/internal/gb/debugger/cli.h>
 #include <mgba/internal/gb/debugger/debugger.h>
 #include <mgba/internal/gb/debugger/symbols.h>
-#include <mgba/internal/gb/extra/cli.h>
 #include <mgba/internal/gb/io.h>
 #include <mgba/internal/gb/gb.h>
 #include <mgba/internal/gb/mbc.h>
@@ -99,6 +99,8 @@ struct GBCore {
 	uint8_t keys;
 	struct mCPUComponent* components[CPU_COMPONENT_MAX];
 	const struct Configuration* overrides;
+	struct GBCartridgeOverride override;
+	bool hasOverride;
 	struct mDebuggerPlatform* debuggerPlatform;
 	struct mCheatDevice* cheatDevice;
 	struct mCoreMemoryBlock memoryBlocks[8];
@@ -124,6 +126,8 @@ static bool _GBCoreInit(struct mCore* core) {
 	gbcore->logContext = NULL;
 #endif
 	memcpy(gbcore->memoryBlocks, _GBMemoryBlocks, sizeof(_GBMemoryBlocks));
+	memset(&gbcore->override, 0, sizeof(gbcore->override));
+	gbcore->hasOverride = false;
 
 	GBCreate(gb);
 	memset(gbcore->components, 0, sizeof(gbcore->components));
@@ -160,7 +164,7 @@ static void _GBCoreDeinit(struct mCore* core) {
 #if !defined(MINIMAL_CORE) || MINIMAL_CORE < 2
 	mDirectorySetDeinit(&core->dirs);
 #endif
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	if (core->symbolTable) {
 		mDebuggerSymbolTableDestroy(core->symbolTable);
 	}
@@ -364,6 +368,12 @@ static void _GBCoreReloadConfigOption(struct mCore* core, const char* option, co
 	}
 }
 
+static void _GBCoreSetOverride(struct mCore* core, const void* override) {
+	struct GBCore* gbcore = (struct GBCore*) core;
+	memcpy(&gbcore->override, override, sizeof(gbcore->override));
+	gbcore->hasOverride = true;
+}
+
 static void _GBCoreBaseVideoSize(const struct mCore* core, unsigned* width, unsigned* height) {
 	UNUSED(core);
 	*width = SGB_VIDEO_HORIZONTAL_PIXELS;
@@ -541,14 +551,15 @@ static void _GBCoreReset(struct mCore* core) {
 			mCoreConfigGetIntValue(&core->config, "useCgbColors", &doColorOverride);
 		}
 
-		struct GBCartridgeOverride override;
 		const struct GBCartridge* cart = (const struct GBCartridge*) &gb->memory.rom[0x100];
-		override.headerCrc32 = doCrc32(cart, sizeof(*cart));
-		bool modelOverride = GBOverrideFind(gbcore->overrides, &override) || (doColorOverride && GBOverrideColorFind(&override, doColorOverride));
-		if (modelOverride) {
-			GBOverrideApply(gb, &override);
+		if (!gbcore->hasOverride) {
+			gbcore->override.headerCrc32 = doCrc32(cart, sizeof(*cart));
+			gbcore->hasOverride = GBOverrideFind(gbcore->overrides, &gbcore->override) || (doColorOverride && GBOverrideColorFind(&gbcore->override, doColorOverride));
 		}
-		if (!modelOverride || override.model == GB_MODEL_AUTODETECT) {
+		if (gbcore->hasOverride) {
+			GBOverrideApply(gb, &gbcore->override);
+		}
+		if (!gbcore->hasOverride || gbcore->override.model == GB_MODEL_AUTODETECT) {
 			const char* modelGB = mCoreConfigGetValue(&core->config, "gb.model");
 			const char* modelSGB = mCoreConfigGetValue(&core->config, "sgb.model");
 			const char* modelCGB = mCoreConfigGetValue(&core->config, "cgb.model");
@@ -675,8 +686,10 @@ static void _GBCoreReset(struct mCore* core) {
 	size_t i;
 	for (i = 0; i < sizeof(gbcore->memoryBlocks) / sizeof(*gbcore->memoryBlocks); ++i) {
 		if (gbcore->memoryBlocks[i].id == GB_REGION_CART_BANK0) {
+			gbcore->memoryBlocks[i].size = gb->memory.romSize;
 			gbcore->memoryBlocks[i].maxSegment = gb->memory.romSize / GB_SIZE_CART_BANK0;
 		} else if (gbcore->memoryBlocks[i].id == GB_REGION_EXTERNAL_RAM) {
+			gbcore->memoryBlocks[i].size = gb->sramSize;
 			gbcore->memoryBlocks[i].maxSegment = gb->sramSize / GB_SIZE_EXTERNAL_RAM;
 		} else {
 			continue;
@@ -792,6 +805,20 @@ static void _GBCoreSetPeripheral(struct mCore* core, int type, void* periph) {
 		break;
 	default:
 		return;
+	}
+}
+
+static void* _GBCoreGetPeripheral(struct mCore* core, int type) {
+	struct GB* gb = core->board;
+	switch (type) {
+	case mPERIPH_ROTATION:
+		return gb->memory.rotation;
+	case mPERIPH_RUMBLE:
+		return gb->memory.rumble;
+	case mPERIPH_IMAGE_SOURCE:
+		return gb->memory.cam;
+	default:
+		return NULL;
 	}
 }
 
@@ -1033,7 +1060,7 @@ static bool _GBCoreWriteRegister(struct mCore* core, const char* name, const voi
 	return false;
 }
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 static bool _GBCoreSupportsDebuggerType(struct mCore* core, enum mDebuggerType type) {
 	UNUSED(core);
 	switch (type) {
@@ -1061,6 +1088,9 @@ static struct CLIDebuggerSystem* _GBCoreCliDebuggerSystem(struct mCore* core) {
 
 static void _GBCoreAttachDebugger(struct mCore* core, struct mDebugger* debugger) {
 	struct SM83Core* cpu = core->cpu;
+	if (core->debugger == debugger) {
+		return;
+	}
 	if (core->debugger) {
 		SM83HotplugDetach(cpu, CPU_COMPONENT_DEBUGGER);
 	}
@@ -1081,7 +1111,7 @@ static void _GBCoreDetachDebugger(struct mCore* core) {
 static void _GBCoreLoadSymbols(struct mCore* core, struct VFile* vf) {
 	core->symbolTable = mDebuggerSymbolTableCreate();
 #if !defined(MINIMAL_CORE) || MINIMAL_CORE < 2
-	if (!vf) {
+	if (!vf && core->dirs.base) {
 		vf = mDirectorySetOpenSuffix(&core->dirs, core->dirs.base, ".sym", O_RDONLY);
 	}
 #endif
@@ -1263,6 +1293,7 @@ struct mCore* GBCoreCreate(void) {
 	core->setSync = _GBCoreSetSync;
 	core->loadConfig = _GBCoreLoadConfig;
 	core->reloadConfigOption = _GBCoreReloadConfigOption;
+	core->setOverride = _GBCoreSetOverride;
 	core->baseVideoSize = _GBCoreBaseVideoSize;
 	core->currentVideoSize = _GBCoreCurrentVideoSize;
 	core->videoScale = _GBCoreVideoScale;
@@ -1303,6 +1334,7 @@ struct mCore* GBCoreCreate(void) {
 	core->getGameTitle = _GBCoreGetGameTitle;
 	core->getGameCode = _GBCoreGetGameCode;
 	core->setPeripheral = _GBCoreSetPeripheral;
+	core->getPeripheral = _GBCoreGetPeripheral;
 	core->busRead8 = _GBCoreBusRead8;
 	core->busRead16 = _GBCoreBusRead16;
 	core->busRead32 = _GBCoreBusRead32;
@@ -1320,7 +1352,7 @@ struct mCore* GBCoreCreate(void) {
 	core->listRegisters = _GBCoreListRegisters;
 	core->readRegister = _GBCoreReadRegister;
 	core->writeRegister = _GBCoreWriteRegister;
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	core->supportsDebuggerType = _GBCoreSupportsDebuggerType;
 	core->debuggerPlatform = _GBCoreDebuggerPlatform;
 	core->cliDebuggerSystem = _GBCoreCliDebuggerSystem;

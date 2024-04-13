@@ -731,8 +731,8 @@ static struct VDir* _makeOutDir(const char* testName) {
 
 static void _writeImage(struct VFile* vf, const struct CInemaImage* image) {
 	png_structp png = PNGWriteOpen(vf);
-	png_infop info = PNGWriteHeader(png, image->width, image->height);
-	if (!PNGWritePixels(png, image->width, image->height, image->stride, image->data)) {
+	png_infop info = PNGWriteHeader(png, image->width, image->height, mCOLOR_NATIVE);
+	if (!PNGWritePixels(png, image->width, image->height, image->stride, image->data, mCOLOR_NATIVE)) {
 		CIerr(0, "Could not write output image\n");
 	}
 	PNGWriteClose(png, info);
@@ -1177,7 +1177,7 @@ void CInemaTestRun(struct CInemaTest* test) {
 		if (test->status == CI_ERROR) {
 			break;
 		}
-		bool failed = false;
+		bool failed = true;
 		if (baselineFound) {
 			int max = 0;
 			failed = !_compareImages(test, &image, &expected, &max, diffs ? &diff : NULL);
@@ -1365,6 +1365,7 @@ static THREAD_ENTRY CInemaJob(void* context) {
 	CIflush(&stream.err, stderr);
 	StringListDeinit(&stream.err.lines);
 	StringListDeinit(&stream.err.partial);
+	THREAD_EXIT(0);
 }
 
 void _log(struct mLogger* log, int category, enum mLogLevel level, const char* format, va_list args) {

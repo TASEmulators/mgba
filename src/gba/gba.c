@@ -49,7 +49,7 @@ static void GBATestIRQNoDelay(struct ARMCore* cpu);
 
 static void _triggerIRQ(struct mTiming*, void* user, uint32_t cyclesLate);
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 static bool _setSoftwareBreakpoint(struct ARMDebugger*, uint32_t address, enum ExecutionMode mode, uint32_t* opcode);
 static void _clearSoftwareBreakpoint(struct ARMDebugger*, const struct ARMDebugBreakpoint*);
 #endif
@@ -111,7 +111,7 @@ static void GBAInit(void* cpu, struct mCPUComponent* component) {
 	gba->biosChecksum = GBAChecksum(gba->memory.bios, GBA_SIZE_BIOS);
 
 	gba->idleOptimization = IDLE_LOOP_REMOVE;
-	gba->idleLoop = IDLE_LOOP_NONE;
+	gba->idleLoop = GBA_IDLE_LOOP_NONE;
 
 	gba->vbaBugCompat = false;
 	gba->hardCrash = true;
@@ -132,6 +132,7 @@ static void GBAInit(void* cpu, struct mCPUComponent* component) {
 }
 
 void GBAUnloadROM(struct GBA* gba) {
+	GBAMemoryClearAGBPrint(gba);
 	if (gba->memory.rom && !gba->isPristine) {
 		if (gba->yankedRomSize) {
 			gba->yankedRomSize = 0;
@@ -164,7 +165,7 @@ void GBAUnloadROM(struct GBA* gba) {
 		gba->memory.savedata.realVf->close(gba->memory.savedata.realVf);
 		gba->memory.savedata.realVf = 0;
 	}
-	gba->idleLoop = IDLE_LOOP_NONE;
+	gba->idleLoop = GBA_IDLE_LOOP_NONE;
 }
 
 void GBADestroy(struct GBA* gba) {
@@ -281,10 +282,10 @@ void GBASkipBIOS(struct GBA* gba) {
 			cpu->gprs[ARM_PC] = GBA_BASE_EWRAM;
 		}
 		gba->video.vcount = 0x7E;
-		gba->memory.io[REG_VCOUNT >> 1] = 0x7E;
+		gba->memory.io[GBA_REG(VCOUNT)] = 0x7E;
 		mTimingDeschedule(&gba->timing, &gba->video.event);
 		mTimingSchedule(&gba->timing, &gba->video.event, 117);
-		gba->memory.io[REG_POSTFLG >> 1] = 1;
+		gba->memory.io[GBA_REG(POSTFLG)] = 1;
 		ARMWritePC(cpu);
 	}
 }
@@ -304,7 +305,7 @@ static void GBAProcessEvents(struct ARMCore* cpu) {
 		do {
 			int32_t cycles = cpu->cycles;
 			cpu->cycles = 0;
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 			gba->timing.globalCycles += cycles < nextEvent ? nextEvent : cycles;
 #endif
 #ifndef NDEBUG
@@ -318,7 +319,7 @@ static void GBAProcessEvents(struct ARMCore* cpu) {
 		cpu->nextEvent = nextEvent;
 		if (cpu->halted) {
 			cpu->cycles = nextEvent;
-			if (!gba->memory.io[REG_IME >> 1] || !gba->memory.io[REG_IE >> 1]) {
+			if (!gba->memory.io[GBA_REG(IME)] || !gba->memory.io[GBA_REG(IE)]) {
 				break;
 			}
 		}
@@ -337,7 +338,7 @@ static void GBAProcessEvents(struct ARMCore* cpu) {
 	}
 }
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 void GBAAttachDebugger(struct GBA* gba, struct mDebugger* debugger) {
 	gba->debugger = (struct ARMDebugger*) debugger->platform;
 	gba->debugger->setSoftwareBreakpoint = _setSoftwareBreakpoint;
@@ -468,10 +469,10 @@ bool GBALoadROM(struct GBA* gba, struct VFile* vf) {
 }
 
 bool GBALoadSave(struct GBA* gba, struct VFile* sav) {
-	enum SavedataType type = gba->memory.savedata.type;
+	enum GBASavedataType type = gba->memory.savedata.type;
 	GBASavedataDeinit(&gba->memory.savedata);
 	GBASavedataInit(&gba->memory.savedata, sav);
-	if (type != SAVEDATA_AUTODETECT) {
+	if (type != GBA_SAVEDATA_AUTODETECT) {
 		GBASavedataForceType(&gba->memory.savedata, type);
 	}
 	return sav;
@@ -547,7 +548,7 @@ void GBAApplyPatch(struct GBA* gba, struct Patch* patch) {
 }
 
 void GBARaiseIRQ(struct GBA* gba, enum GBAIRQ irq, uint32_t cyclesLate) {
-	gba->memory.io[REG_IF >> 1] |= 1 << irq;
+	gba->memory.io[GBA_REG(IF)] |= 1 << irq;
 	GBATestIRQ(gba, cyclesLate);
 }
 
@@ -557,7 +558,7 @@ void GBATestIRQNoDelay(struct ARMCore* cpu) {
 }
 
 void GBATestIRQ(struct GBA* gba, uint32_t cyclesLate) {
-	if (gba->memory.io[REG_IE >> 1] & gba->memory.io[REG_IF >> 1]) {
+	if (gba->memory.io[GBA_REG(IE)] & gba->memory.io[GBA_REG(IF)]) {
 		if (!mTimingIsScheduled(&gba->timing, &gba->irqEvent)) {
 			mTimingSchedule(&gba->timing, &gba->irqEvent, GBA_IRQ_DELAY - cyclesLate);
 		}
@@ -571,7 +572,7 @@ void GBAHalt(struct GBA* gba) {
 
 void GBAStop(struct GBA* gba) {
 	int validIrqs = (1 << GBA_IRQ_GAMEPAK) | (1 << GBA_IRQ_KEYPAD) | (1 << GBA_IRQ_SIO);
-	int sleep = gba->memory.io[REG_IE >> 1] & validIrqs;
+	int sleep = gba->memory.io[GBA_REG(IE)] & validIrqs;
 	size_t c;
 	for (c = 0; c < mCoreCallbacksListSize(&gba->coreCallbacks); ++c) {
 		struct mCoreCallbacks* callbacks = mCoreCallbacksListGetPointer(&gba->coreCallbacks, c);
@@ -663,7 +664,6 @@ bool GBAIsROM(struct VFile* vf) {
 #ifdef USE_ELF
 	struct ELF* elf = ELFOpen(vf);
 	if (elf) {
-		uint32_t entry = ELFEntry(elf);
 		bool isGBA = true;
 		isGBA = isGBA && ELFMachine(elf) == EM_ARM;
 		isGBA = isGBA && (GBAVerifyELFEntry(elf, GBA_BASE_ROM0) || GBAVerifyELFEntry(elf, GBA_BASE_EWRAM + 0xC0));
@@ -850,7 +850,7 @@ void GBAGetGameTitle(const struct GBA* gba, char* out) {
 void GBAHitStub(struct ARMCore* cpu, uint32_t opcode) {
 	struct GBA* gba = (struct GBA*) cpu->master;
 	UNUSED(gba);
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	if (gba->debugger) {
 		struct mDebuggerEntryInfo info = {
 			.address = _ARMPCAddress(cpu),
@@ -873,7 +873,7 @@ void GBAIllegal(struct ARMCore* cpu, uint32_t opcode) {
 		// TODO: More sensible category?
 		mLOG(GBA, WARN, "Illegal opcode: %08x", opcode);
 	}
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	if (gba->debugger) {
 		struct mDebuggerEntryInfo info = {
 			.address = _ARMPCAddress(cpu),
@@ -887,11 +887,8 @@ void GBAIllegal(struct ARMCore* cpu, uint32_t opcode) {
 
 void GBABreakpoint(struct ARMCore* cpu, int immediate) {
 	struct GBA* gba = (struct GBA*) cpu->master;
-	if (immediate >= CPU_COMPONENT_MAX) {
-		return;
-	}
 	switch (immediate) {
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	case CPU_COMPONENT_DEBUGGER:
 		if (gba->debugger) {
 			struct mDebuggerEntryInfo info = {
@@ -900,6 +897,7 @@ void GBABreakpoint(struct ARMCore* cpu, int immediate) {
 				.pointId = -1
 			};
 			mDebuggerEnter(gba->debugger->d.p, DEBUGGER_ENTER_BREAKPOINT, &info);
+			return;
 		}
 		break;
 #endif
@@ -918,11 +916,13 @@ void GBABreakpoint(struct ARMCore* cpu, int immediate) {
 			if (hook) {
 				ARMRunFake(cpu, hook->patchedOpcode);
 			}
+			return;
 		}
 		break;
 	default:
 		break;
 	}
+	ARMRaiseUndefined(cpu);
 }
 
 void GBAFrameStarted(struct GBA* gba) {
@@ -983,7 +983,7 @@ void GBATestKeypadIRQ(struct GBA* gba) {
 	uint16_t keysLast = gba->keysLast;
 	uint16_t keysActive = gba->keysActive;
 
-	uint16_t keycnt = gba->memory.io[REG_KEYCNT >> 1];
+	uint16_t keycnt = gba->memory.io[GBA_REG(KEYCNT)];
 	if (!(keycnt & 0x4000)) {
 		return;
 	}
@@ -1008,11 +1008,11 @@ static void _triggerIRQ(struct mTiming* timing, void* user, uint32_t cyclesLate)
 	UNUSED(cyclesLate);
 	struct GBA* gba = user;
 	gba->cpu->halted = 0;
-	if (!(gba->memory.io[REG_IE >> 1] & gba->memory.io[REG_IF >> 1])) {
+	if (!(gba->memory.io[GBA_REG(IE)] & gba->memory.io[GBA_REG(IF)])) {
 		return;
 	}
 
-	if (gba->memory.io[REG_IME >> 1] && !gba->cpu->cpsr.i) {
+	if (gba->memory.io[GBA_REG(IME)] && !gba->cpu->cpsr.i) {
 		ARMRaiseIRQ(gba->cpu);
 	}
 }
@@ -1053,7 +1053,7 @@ void GBAClearBreakpoint(struct GBA* gba, uint32_t address, enum ExecutionMode mo
 	}
 }
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 static bool _setSoftwareBreakpoint(struct ARMDebugger* debugger, uint32_t address, enum ExecutionMode mode, uint32_t* opcode) {
 	GBASetBreakpoint((struct GBA*) debugger->cpu->master, &debugger->d.p->d, address, mode, opcode);
 	return true;

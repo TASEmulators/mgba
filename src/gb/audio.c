@@ -33,10 +33,10 @@ static void _writeDuty(struct GBAudioEnvelope* envelope, uint8_t value);
 static bool _writeEnvelope(struct GBAudioEnvelope* envelope, uint8_t value, enum GBAudioStyle style);
 
 static void _resetSweep(struct GBAudioSweep* sweep);
-static bool _resetEnvelope(struct GBAudioEnvelope* sweep);
+static bool _resetEnvelope(struct GBAudioEnvelope* sweep, enum GBAudioStyle style);
 
 static void _updateEnvelope(struct GBAudioEnvelope* envelope);
-static void _updateEnvelopeDead(struct GBAudioEnvelope* envelope);
+static void _updateEnvelopeDead(struct GBAudioEnvelope* envelope, enum GBAudioStyle style);
 static bool _updateSweep(struct GBAudioSquareChannel* sweep, bool initial);
 
 static void _updateSquareSample(struct GBAudioSquareChannel* ch);
@@ -100,22 +100,24 @@ void GBAudioReset(struct GBAudio* audio) {
 	audio->ch3 = (struct GBAudioWaveChannel) { .bank = 0 };
 	audio->ch4 = (struct GBAudioNoiseChannel) { .nSamples = 0 };
 	// TODO: DMG randomness
-	audio->ch3.wavedata8[0] = 0x00;
-	audio->ch3.wavedata8[1] = 0xFF;
-	audio->ch3.wavedata8[2] = 0x00;
-	audio->ch3.wavedata8[3] = 0xFF;
-	audio->ch3.wavedata8[4] = 0x00;
-	audio->ch3.wavedata8[5] = 0xFF;
-	audio->ch3.wavedata8[6] = 0x00;
-	audio->ch3.wavedata8[7] = 0xFF;
-	audio->ch3.wavedata8[8] = 0x00;
-	audio->ch3.wavedata8[9] = 0xFF;
-	audio->ch3.wavedata8[10] = 0x00;
-	audio->ch3.wavedata8[11] = 0xFF;
-	audio->ch3.wavedata8[12] = 0x00;
-	audio->ch3.wavedata8[13] = 0xFF;
-	audio->ch3.wavedata8[14] = 0x00;
-	audio->ch3.wavedata8[15] = 0xFF;
+	if (audio->style != GB_AUDIO_GBA) {
+		audio->ch3.wavedata8[0] = 0x00;
+		audio->ch3.wavedata8[1] = 0xFF;
+		audio->ch3.wavedata8[2] = 0x00;
+		audio->ch3.wavedata8[3] = 0xFF;
+		audio->ch3.wavedata8[4] = 0x00;
+		audio->ch3.wavedata8[5] = 0xFF;
+		audio->ch3.wavedata8[6] = 0x00;
+		audio->ch3.wavedata8[7] = 0xFF;
+		audio->ch3.wavedata8[8] = 0x00;
+		audio->ch3.wavedata8[9] = 0xFF;
+		audio->ch3.wavedata8[10] = 0x00;
+		audio->ch3.wavedata8[11] = 0xFF;
+		audio->ch3.wavedata8[12] = 0x00;
+		audio->ch3.wavedata8[13] = 0xFF;
+		audio->ch3.wavedata8[14] = 0x00;
+		audio->ch3.wavedata8[15] = 0xFF;
+	}
 	audio->ch4 = (struct GBAudioNoiseChannel) { .envelope = { .dead = 2 } };
 	audio->frame = 0;
 	audio->sampleInterval = SAMPLE_INTERVAL * GB_MAX_SAMPLES;
@@ -138,6 +140,9 @@ void GBAudioReset(struct GBAudio* audio) {
 }
 
 void GBAudioResizeBuffer(struct GBAudio* audio, size_t samples) {
+	if (samples > BLIP_BUFFER_SIZE / 2) {
+		samples = BLIP_BUFFER_SIZE / 2;
+	}
 	mCoreSyncLockAudio(audio->p->sync);
 	audio->samples = samples;
 	blip_clear(audio->left);
@@ -187,7 +192,7 @@ void GBAudioWriteNR14(struct GBAudio* audio, uint8_t value) {
 		}
 	}
 	if (GBAudioRegisterControlIsRestart(value << 8)) {
-		audio->playingCh1 = _resetEnvelope(&audio->ch1.envelope);
+		audio->playingCh1 = _resetEnvelope(&audio->ch1.envelope, audio->style);
 		audio->ch1.sweep.realFrequency = audio->ch1.control.frequency;
 		_resetSweep(&audio->ch1.sweep);
 		if (audio->playingCh1 && audio->ch1.sweep.shift) {
@@ -238,7 +243,7 @@ void GBAudioWriteNR24(struct GBAudio* audio, uint8_t value) {
 		}
 	}
 	if (GBAudioRegisterControlIsRestart(value << 8)) {
-		audio->playingCh2 = _resetEnvelope(&audio->ch2.envelope);
+		audio->playingCh2 = _resetEnvelope(&audio->ch2.envelope, audio->style);
 
 		if (!audio->ch2.control.length) {
 			audio->ch2.control.length = 64;
@@ -378,13 +383,9 @@ void GBAudioWriteNR44(struct GBAudio* audio, uint8_t value) {
 		}
 	}
 	if (GBAudioRegisterNoiseControlIsRestart(value)) {
-		audio->playingCh4 = _resetEnvelope(&audio->ch4.envelope);
+		audio->playingCh4 = _resetEnvelope(&audio->ch4.envelope, audio->style);
 
-		if (audio->ch4.power) {
-			audio->ch4.lfsr = 0x7F;
-		} else {
-			audio->ch4.lfsr = 0x7FFF;
-		}
+		audio->ch4.lfsr = 0;
 		if (!audio->ch4.length) {
 			audio->ch4.length = 64;
 			if (audio->ch4.stop && !(audio->frame & 1)) {
@@ -503,7 +504,7 @@ void GBAudioRun(struct GBAudio* audio, int32_t timestamp, int channels) {
 		GBAudioSample(audio, timestamp);
 	}
 
-	if (audio->playingCh1 && (channels & 0x1) && audio->ch1.envelope.dead != 2) {
+	if ((channels & 0x1) && ((audio->playingCh1 && audio->ch1.envelope.dead != 2) || timestamp - audio->ch1.lastUpdate > 0x40000000 || (channels == 0x1))) {
 		int period = 4 * (2048 - audio->ch1.control.frequency) * audio->timingFactor;
 		int32_t diff = timestamp - audio->ch1.lastUpdate;
 		if (diff >= period) {
@@ -513,7 +514,7 @@ void GBAudioRun(struct GBAudio* audio, int32_t timestamp, int channels) {
 			_updateSquareSample(&audio->ch1);
 		}
 	}
-	if (audio->playingCh2 && (channels & 0x2) && audio->ch2.envelope.dead != 2) {
+	if ((channels & 0x2) && ((audio->playingCh2 && audio->ch2.envelope.dead != 2) || timestamp - audio->ch2.lastUpdate > 0x40000000 || (channels == 0x2))) {
 		int period = 4 * (2048 - audio->ch2.control.frequency) * audio->timingFactor;
 		int32_t diff = timestamp - audio->ch2.lastUpdate;
 		if (diff >= period) {
@@ -596,24 +597,58 @@ void GBAudioRun(struct GBAudio* audio, int32_t timestamp, int channels) {
 		}
 	}
 	if (audio->playingCh4 && (channels & 0x8)) {
+		const uint16_t noiseMaskTable[0x40] = {
+			0x3f, 0x3e, 0x3c, 0x3d, 0x39, 0x38, 0x3a, 0x3b,
+			0x33, 0x32, 0x30, 0x31, 0x35, 0x34, 0x36, 0x37,
+			0x27, 0x26, 0x24, 0x25, 0x21, 0x20, 0x22, 0x23,
+			0x2b, 0x2a, 0x28, 0x29, 0x2d, 0x2c, 0x2e, 0x2f,
+			0x0f, 0x0e, 0x0c, 0x0d, 0x09, 0x08, 0x0a, 0x0b,
+			0x03, 0x02, 0x00, 0x01, 0x05, 0x04, 0x06, 0x07,
+			0x17, 0x16, 0x14, 0x15, 0x11, 0x10, 0x12, 0x13,
+			0x1b, 0x1a, 0x18, 0x19, 0x1d, 0x1c, 0x1e, 0x1f
+		};
+		const uint16_t noisePopulationTable[0x40] = {
+			6, 5, 4, 5, 4, 3, 4, 5, 4, 3, 2, 3, 4, 3, 4, 5,
+			4, 3, 2, 3, 2, 1, 2, 3, 4, 3, 2, 3, 4, 3, 4, 5,
+			4, 3, 2, 3, 2, 1, 2, 3, 2, 1, 0, 1, 2, 1, 2, 3,
+			4, 3, 2, 3, 2, 1, 2, 3, 4, 3, 2, 3, 4, 3, 4, 5
+		};
 		int32_t cycles = audio->ch4.ratio ? 2 * audio->ch4.ratio : 1;
 		cycles <<= audio->ch4.frequency;
 		cycles *= 8 * audio->timingFactor;
 
 		int32_t diff = timestamp - audio->ch4.lastEvent;
 		if (diff >= cycles) {
-			int32_t last;
+			int32_t last = 0;
 			int samples = 0;
 			int positiveSamples = 0;
 			int lsb;
-			int coeff = 0x60;
-			if (!audio->ch4.power) {
-				coeff <<= 8;
+			int coeff;
+			if (audio->ch4.power) {
+				// TODO: Can this be batched too?
+				coeff = 0x4040;
+			} else {
+				int bits = 0;
+				// Batch 5 steps at a time when possible
+				for (; last + cycles * 5 <= diff; last += cycles * 5) {
+					bits = audio->ch4.lfsr & 0x3F;
+					audio->ch4.lfsr >>= 5;
+					audio->ch4.lfsr |= 0x4000 * noiseMaskTable[bits] >> 4;
+					audio->ch4.lfsr &= 0x7FFF;
+					samples += 5;
+					positiveSamples += noisePopulationTable[bits];
+				}
+				lsb = noiseMaskTable[bits] & 1;
+				coeff = 0x4000;
 			}
-			for (last = 0; last + cycles <= diff; last += cycles) {
-				lsb = audio->ch4.lfsr & 1;
+			for (; last + cycles <= diff; last += cycles) {
+				lsb = (audio->ch4.lfsr ^ (audio->ch4.lfsr >> 1) ^ 1) & 1;
 				audio->ch4.lfsr >>= 1;
-				audio->ch4.lfsr ^= lsb * coeff;
+				if (lsb) {
+					audio->ch4.lfsr |= coeff;
+				} else {
+					audio->ch4.lfsr &= ~coeff;
+				}
 				++samples;
 				positiveSamples += lsb;
 			}
@@ -644,7 +679,9 @@ void GBAudioUpdateFrame(struct GBAudio* audio) {
 		if (audio->ch1.sweep.enable) {
 			--audio->ch1.sweep.step;
 			if (audio->ch1.sweep.step == 0) {
-				audio->playingCh1 = _updateSweep(&audio->ch1, false);
+				if (!_updateSweep(&audio->ch1, false)) {
+					audio->playingCh1 = false;
+				}
 				*audio->nr52 &= ~0x0001;
 				*audio->nr52 |= audio->playingCh1;
 			}
@@ -840,12 +877,10 @@ static void _sample(struct mTiming* timing, void* user, uint32_t cyclesLate) {
 	mTimingSchedule(timing, &audio->sampleEvent, audio->sampleInterval * audio->timingFactor - cyclesLate);
 }
 
-bool _resetEnvelope(struct GBAudioEnvelope* envelope) {
+bool _resetEnvelope(struct GBAudioEnvelope* envelope, enum GBAudioStyle style) {
 	envelope->currentVolume = envelope->initialVolume;
-	_updateEnvelopeDead(envelope);
-	if (!envelope->dead) {
-		envelope->nextStep = envelope->stepTime;
-	}
+	envelope->nextStep = envelope->stepTime;
+	_updateEnvelopeDead(envelope, style);
 	return envelope->initialVolume || envelope->direction;
 }
 
@@ -877,15 +912,28 @@ void _writeDuty(struct GBAudioEnvelope* envelope, uint8_t value) {
 }
 
 bool _writeEnvelope(struct GBAudioEnvelope* envelope, uint8_t value, enum GBAudioStyle style) {
+	bool oldDirection = envelope->direction;
 	envelope->stepTime = GBAudioRegisterSweepGetStepTime(value);
 	envelope->direction = GBAudioRegisterSweepGetDirection(value);
 	envelope->initialVolume = GBAudioRegisterSweepGetInitialVolume(value);
-	if (style == GB_AUDIO_DMG && !envelope->stepTime) {
+	if (!envelope->stepTime) {
 		// TODO: Improve "zombie" mode
-		++envelope->currentVolume;
+		if (style == GB_AUDIO_DMG) {
+			++envelope->currentVolume;
+		} else if (style == GB_AUDIO_CGB) {
+			if (envelope->direction == oldDirection) {
+				if (envelope->direction) {
+					++envelope->currentVolume;
+				} else {
+					envelope->currentVolume += 2;
+				}
+			} else {
+				envelope->currentVolume = 0;
+			}
+		}
 		envelope->currentVolume &= 0xF;
 	}
-	_updateEnvelopeDead(envelope);
+	_updateEnvelopeDead(envelope, style);
 	return envelope->initialVolume || envelope->direction;
 }
 
@@ -921,14 +969,19 @@ static void _updateEnvelope(struct GBAudioEnvelope* envelope) {
 	}
 }
 
-static void _updateEnvelopeDead(struct GBAudioEnvelope* envelope) {
+static void _updateEnvelopeDead(struct GBAudioEnvelope* envelope, enum GBAudioStyle style) {
 	if (!envelope->stepTime) {
 		envelope->dead = envelope->currentVolume ? 1 : 2;
 	} else if (!envelope->direction && !envelope->currentVolume) {
 		envelope->dead = 2;
 	} else if (envelope->direction && envelope->currentVolume == 0xF) {
 		envelope->dead = 1;
-	} else {
+	} else if (envelope->dead) {
+		// TODO: Figure out if this happens on DMG/CGB or just AGB
+		// TODO: Figure out the exact circumstances that lead to reloading the step
+		if (style == GB_AUDIO_GBA) {
+			envelope->nextStep = envelope->stepTime;
+		}
 		envelope->dead = 0;
 	}
 }

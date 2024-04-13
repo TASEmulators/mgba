@@ -42,18 +42,14 @@ static BOOL CALLBACK _createTLS(PINIT_ONCE once, PVOID param, PVOID* context) {
 
 static void _mCoreLog(struct mLogger* logger, int category, enum mLogLevel level, const char* format, va_list args);
 
-static void _changeState(struct mCoreThreadInternal* threadContext, enum mCoreThreadState newState, bool broadcast) {
-	MutexLock(&threadContext->stateMutex);
+static void _changeState(struct mCoreThreadInternal* threadContext, enum mCoreThreadState newState) {
 	threadContext->state = newState;
-	if (broadcast) {
-		ConditionWake(&threadContext->stateCond);
-	}
-	MutexUnlock(&threadContext->stateMutex);
+	ConditionWake(&threadContext->stateOffThreadCond);
 }
 
 static void _waitOnInterrupt(struct mCoreThreadInternal* threadContext) {
 	while (threadContext->state == mTHREAD_INTERRUPTED || threadContext->state == mTHREAD_INTERRUPTING) {
-		ConditionWait(&threadContext->stateCond, &threadContext->stateMutex);
+		ConditionWait(&threadContext->stateOnThreadCond, &threadContext->stateMutex);
 	}
 }
 
@@ -107,17 +103,14 @@ static void _wait(struct mCoreThreadInternal* threadContext) {
 		MutexUnlock(&threadContext->sync.audioBufferMutex);
 	}
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	if (threadContext->core && threadContext->core->debugger) {
-		struct mDebugger* debugger = threadContext->core->debugger;
-		if (debugger->interrupt) {
-			debugger->interrupt(debugger);
-		}
+		mDebuggerInterrupt(threadContext->core->debugger);
 	}
 #endif
 
 	MutexLock(&threadContext->stateMutex);
-	ConditionWake(&threadContext->stateCond);
+	ConditionWake(&threadContext->stateOnThreadCond);
 }
 
 static void _waitOnRequest(struct mCoreThreadInternal* threadContext, enum mCoreThreadRequest request) {
@@ -147,7 +140,7 @@ static void _sendRequest(struct mCoreThreadInternal* threadContext, enum mCoreTh
 static void _cancelRequest(struct mCoreThreadInternal* threadContext, enum mCoreThreadRequest request) {
 	threadContext->requested &= ~request;
 	_pokeRequest(threadContext);
-	ConditionWake(&threadContext->stateCond);
+	ConditionWake(&threadContext->stateOnThreadCond);
 }
 
 void _frameStarted(void* context) {
@@ -156,8 +149,12 @@ void _frameStarted(void* context) {
 		return;
 	}
 	if (thread->core->opts.rewindEnable && thread->core->opts.rewindBufferCapacity > 0) {
-		if (!thread->impl->rewinding || !mCoreRewindRestore(&thread->impl->rewind, thread->core)) {
-			mCoreRewindAppend(&thread->impl->rewind, thread->core);
+		if (!thread->impl->rewinding || !mCoreRewindRestore(&thread->impl->rewind, thread->core, 1)) {
+			if (thread->impl->rewind.rewindFrameCounter == 0) {
+				mCoreRewindAppend(&thread->impl->rewind, thread->core);
+				thread->impl->rewind.rewindFrameCounter = thread->core->opts.rewindBufferInterval;
+			}
+			thread->impl->rewind.rewindFrameCounter--;
 		}
 	}
 }
@@ -177,7 +174,9 @@ void _crashed(void* context) {
 	if (!thread) {
 		return;
 	}
-	_changeState(thread->impl, mTHREAD_CRASHED, true);
+	MutexLock(&thread->impl->stateMutex);
+	_changeState(thread->impl, mTHREAD_CRASHED);
+	MutexUnlock(&thread->impl->stateMutex);
 }
 
 void _coreSleep(void* context) {
@@ -195,7 +194,9 @@ void _coreShutdown(void* context) {
 	if (!thread) {
 		return;
 	}
-	_changeState(thread->impl, mTHREAD_EXITING, true);
+	MutexLock(&thread->impl->stateMutex);
+	_changeState(thread->impl, mTHREAD_EXITING);
+	MutexUnlock(&thread->impl->stateMutex);
 }
 
 #ifdef ENABLE_SCRIPTING
@@ -217,17 +218,17 @@ ADD_CALLBACK(savedataUpdated)
 ADD_CALLBACK(alarm)
 
 #undef ADD_CALLBACK
-#define CALLBACK(NAME) _script_ ## NAME
+#define SCRIPT(NAME) _script_ ## NAME
 
 static void _mCoreThreadAddCallbacks(struct mCoreThread* threadContext) {
 	struct mCoreCallbacks callbacks = {
-		.videoFrameEnded = CALLBACK(frame),
-		.coreCrashed = CALLBACK(crashed),
-		.sleep = CALLBACK(sleep),
-		.shutdown = CALLBACK(stop),
-		.keysRead = CALLBACK(keysRead),
-		.savedataUpdated = CALLBACK(savedataUpdated),
-		.alarm = CALLBACK(alarm),
+		.videoFrameEnded = SCRIPT(frame),
+		.coreCrashed = SCRIPT(crashed),
+		.sleep = SCRIPT(sleep),
+		.shutdown = SCRIPT(stop),
+		.keysRead = SCRIPT(keysRead),
+		.savedataUpdated = SCRIPT(savedataUpdated),
+		.alarm = SCRIPT(alarm),
 		.context = threadContext
 	};
 	threadContext->core->addCoreCallbacks(threadContext->core, &callbacks);
@@ -244,6 +245,8 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 
 	ThreadLocalSetKey(_contextKey, threadContext);
 	ThreadSetName("CPU Thread");
+
+	mLogSetThreadLogger(&threadContext->logger.d);
 
 #if !defined(_WIN32) && defined(USE_PTHREADS)
 	sigset_t signals;
@@ -300,7 +303,9 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 
 	core->reset(core);
 	threadContext->impl->core = core;
-	_changeState(threadContext->impl, mTHREAD_RUNNING, true);
+	MutexLock(&threadContext->impl->stateMutex);
+	_changeState(threadContext->impl, mTHREAD_RUNNING);
+	MutexUnlock(&threadContext->impl->stateMutex);
 
 	if (threadContext->resetCallback) {
 		threadContext->resetCallback(threadContext);
@@ -323,38 +328,41 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 	bool wasPaused = false;
 	int pendingRequests = 0;
 
+	MutexLock(&impl->stateMutex);
 	while (impl->state < mTHREAD_EXITING) {
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 		struct mDebugger* debugger = core->debugger;
 		if (debugger) {
+			MutexUnlock(&impl->stateMutex);
 			mDebuggerRun(debugger);
+			MutexLock(&impl->stateMutex);
 			if (debugger->state == DEBUGGER_SHUTDOWN) {
-				_changeState(impl, mTHREAD_EXITING, false);
+				impl->state = mTHREAD_EXITING;
 			}
 		} else
 #endif
 		{
 			while (impl->state == mTHREAD_RUNNING) {
+				MutexUnlock(&impl->stateMutex);
 				core->runLoop(core);
+				MutexLock(&impl->stateMutex);
 			}
 		}
 
-		MutexLock(&impl->stateMutex);
 		while (impl->state >= mTHREAD_MIN_WAITING && impl->state < mTHREAD_EXITING) {
 			if (impl->state == mTHREAD_INTERRUPTING) {
-				impl->state = mTHREAD_INTERRUPTED;
-				ConditionWake(&impl->stateCond);
+				_changeState(impl, mTHREAD_INTERRUPTED);
 			}
 
 			while (impl->state >= mTHREAD_MIN_WAITING && impl->state <= mTHREAD_MAX_WAITING) {
-#ifdef USE_DEBUGGERS
-				if (debugger && debugger->update && debugger->state != DEBUGGER_SHUTDOWN) {
-					debugger->update(debugger);
-					ConditionWaitTimed(&impl->stateCond, &impl->stateMutex, 10);
+#ifdef ENABLE_DEBUGGERS
+				if (debugger && debugger->state != DEBUGGER_SHUTDOWN) {
+					mDebuggerUpdate(debugger);
+					ConditionWaitTimed(&impl->stateOnThreadCond, &impl->stateMutex, 10);
 				} else
 #endif
 				{
-					ConditionWait(&impl->stateCond, &impl->stateMutex);
+					ConditionWait(&impl->stateOnThreadCond, &impl->stateMutex);
 				}
 
 				if (impl->sync.audioWait) {
@@ -383,14 +391,13 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 		if (impl->state == mTHREAD_REQUEST) {
 			if (pendingRequests) {
 				if (pendingRequests & mTHREAD_REQ_PAUSE) {
-					impl->state = mTHREAD_PAUSED;
+					_changeState(impl, mTHREAD_PAUSED);
 				}
 				if (pendingRequests & mTHREAD_REQ_WAIT) {
-					impl->state = mTHREAD_PAUSED;
+					_changeState(impl, mTHREAD_PAUSED);
 				}
 			} else {
-				impl->state = mTHREAD_RUNNING;
-				ConditionWake(&threadContext->impl->stateCond);
+				_changeState(impl, mTHREAD_RUNNING);
 			}
 		}
 		MutexUnlock(&impl->stateMutex);
@@ -424,11 +431,14 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 				threadContext->run(threadContext);
 			}
 		}
+		MutexLock(&impl->stateMutex);
 	}
 
-	while (impl->state < mTHREAD_SHUTDOWN) {
-		_changeState(impl, mTHREAD_SHUTDOWN, false);
+	if (impl->state < mTHREAD_SHUTDOWN) {
+		impl->state = mTHREAD_SHUTDOWN;
 	}
+	ConditionWake(&threadContext->impl->stateOffThreadCond);
+	MutexUnlock(&impl->stateMutex);
 
 	if (core->opts.rewindEnable) {
 		 mCoreRewindContextDeinit(&impl->rewind);
@@ -466,7 +476,8 @@ bool mCoreThreadStart(struct mCoreThread* threadContext) {
 	}
 
 	MutexInit(&threadContext->impl->stateMutex);
-	ConditionInit(&threadContext->impl->stateCond);
+	ConditionInit(&threadContext->impl->stateOnThreadCond);
+	ConditionInit(&threadContext->impl->stateOffThreadCond);
 
 	MutexInit(&threadContext->impl->sync.videoFrameMutex);
 	ConditionInit(&threadContext->impl->sync.videoFrameAvailableCond);
@@ -491,7 +502,7 @@ bool mCoreThreadStart(struct mCoreThread* threadContext) {
 	MutexLock(&threadContext->impl->stateMutex);
 	ThreadCreate(&threadContext->impl->thread, _mCoreThreadRun, threadContext);
 	while (threadContext->impl->state < mTHREAD_RUNNING) {
-		ConditionWait(&threadContext->impl->stateCond, &threadContext->impl->stateMutex);
+		ConditionWait(&threadContext->impl->stateOffThreadCond, &threadContext->impl->stateMutex);
 	}
 	MutexUnlock(&threadContext->impl->stateMutex);
 
@@ -533,7 +544,7 @@ bool mCoreThreadHasCrashed(struct mCoreThread* threadContext) {
 
 void mCoreThreadMarkCrashed(struct mCoreThread* threadContext) {
 	MutexLock(&threadContext->impl->stateMutex);
-	threadContext->impl->state = mTHREAD_CRASHED;
+	_changeState(threadContext->impl, mTHREAD_CRASHED);
 	MutexUnlock(&threadContext->impl->stateMutex);
 }
 
@@ -541,7 +552,7 @@ void mCoreThreadClearCrashed(struct mCoreThread* threadContext) {
 	MutexLock(&threadContext->impl->stateMutex);
 	if (threadContext->impl->state == mTHREAD_CRASHED) {
 		threadContext->impl->state = mTHREAD_REQUEST;
-		ConditionWake(&threadContext->impl->stateCond);
+		ConditionWake(&threadContext->impl->stateOnThreadCond);
 	}
 	MutexUnlock(&threadContext->impl->stateMutex);
 }
@@ -550,7 +561,7 @@ void mCoreThreadEnd(struct mCoreThread* threadContext) {
 	MutexLock(&threadContext->impl->stateMutex);
 	_waitOnInterrupt(threadContext->impl);
 	threadContext->impl->state = mTHREAD_EXITING;
-	ConditionWake(&threadContext->impl->stateCond);
+	ConditionWake(&threadContext->impl->stateOnThreadCond);
 	MutexUnlock(&threadContext->impl->stateMutex);
 	MutexLock(&threadContext->impl->sync.audioBufferMutex);
 	threadContext->impl->sync.audioWait = 0;
@@ -579,7 +590,8 @@ void mCoreThreadJoin(struct mCoreThread* threadContext) {
 	ThreadJoin(&threadContext->impl->thread);
 
 	MutexDeinit(&threadContext->impl->stateMutex);
-	ConditionDeinit(&threadContext->impl->stateCond);
+	ConditionDeinit(&threadContext->impl->stateOnThreadCond);
+	ConditionDeinit(&threadContext->impl->stateOffThreadCond);
 
 	MutexDeinit(&threadContext->impl->sync.videoFrameMutex);
 	ConditionWake(&threadContext->impl->sync.videoFrameAvailableCond);
@@ -631,7 +643,6 @@ void mCoreThreadInterruptFromThread(struct mCoreThread* threadContext) {
 		return;
 	}
 	threadContext->impl->state = mTHREAD_INTERRUPTING;
-	ConditionWake(&threadContext->impl->stateCond);
 	MutexUnlock(&threadContext->impl->stateMutex);
 }
 
@@ -647,7 +658,7 @@ void mCoreThreadContinue(struct mCoreThread* threadContext) {
 		} else {
 			threadContext->impl->state = mTHREAD_RUNNING;			
 		}
-		ConditionWake(&threadContext->impl->stateCond);
+		ConditionWake(&threadContext->impl->stateOnThreadCond);
 	}
 	MutexUnlock(&threadContext->impl->stateMutex);
 }
@@ -707,7 +718,7 @@ void mCoreThreadSetRewinding(struct mCoreThread* threadContext, bool rewinding) 
 	threadContext->impl->rewinding = rewinding;
 	if (rewinding && threadContext->impl->state == mTHREAD_CRASHED) {
 		threadContext->impl->state = mTHREAD_REQUEST;
-		ConditionWake(&threadContext->impl->stateCond);
+		ConditionWake(&threadContext->impl->stateOnThreadCond);
 	}
 	MutexUnlock(&threadContext->impl->stateMutex);
 }
@@ -761,12 +772,3 @@ struct mCoreThread* mCoreThreadGet(void) {
 	return NULL;
 }
 #endif
-
-struct mLogger* mCoreThreadLogger(void) {
-	struct mCoreThread* thread = mCoreThreadGet();
-	if (thread) {
-		return &thread->logger.d;
-	}
-	return NULL;
-}
-

@@ -7,6 +7,27 @@
 #ifdef USE_LUA
 #include <mgba/internal/script/lua.h>
 #endif
+#include <mgba-util/threading.h>
+
+static ThreadLocal _threadContext;
+
+#ifdef USE_PTHREADS
+static pthread_once_t _contextOnce = PTHREAD_ONCE_INIT;
+
+static void _createTLS(void) {
+	ThreadLocalInitKey(&_threadContext);
+}
+#elif _WIN32
+static INIT_ONCE _contextOnce = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK _createTLS(PINIT_ONCE once, PVOID param, PVOID* context) {
+	UNUSED(once);
+	UNUSED(param);
+	UNUSED(context);
+	ThreadLocalInitKey(&_threadContext);
+	return TRUE;
+}
+#endif
 
 #define KEY_NAME_MAX 128
 
@@ -74,6 +95,11 @@ static void _freeTable(void* data) {
 }
 
 void mScriptContextInit(struct mScriptContext* context) {
+#ifdef USE_PTHREADS
+	pthread_once(&_contextOnce, _createTLS);
+#elif _WIN32
+	InitOnceExecuteOnce(&_contextOnce, _createTLS, NULL, 0);
+#endif
 	HashTableInit(&context->rootScope, 0, (void (*)(void*)) mScriptValueDeref);
 	HashTableInit(&context->engines, 0, _engineContextDestroy);
 	mScriptListInit(&context->refPool, 0);
@@ -84,6 +110,7 @@ void mScriptContextInit(struct mScriptContext* context) {
 	context->nextCallbackId = 1;
 	context->constants = NULL;
 	HashTableInit(&context->docstrings, 0, NULL);
+	context->threadDepth = 0;
 }
 
 void mScriptContextDeinit(struct mScriptContext* context) {
@@ -235,12 +262,15 @@ void mScriptContextTriggerCallback(struct mScriptContext* context, const char* c
 	do {
 		struct mScriptFrame frame;
 		struct mScriptCallbackInfo* info = TableIteratorGetValue(table, &iter);
-		mScriptFrameInit(&frame);
-		if (args) {
-			mScriptListCopy(&frame.arguments, args);
+		struct mScriptValue* fn = mScriptContextAccessWeakref(context, info->fn);
+		if (fn) {
+			mScriptFrameInit(&frame);
+			if (args) {
+				mScriptListCopy(&frame.arguments, args);
+			}
+			mScriptContextInvoke(context, fn, &frame);
+			mScriptFrameDeinit(&frame);
 		}
-		mScriptInvoke(info->fn, &frame);
-		mScriptFrameDeinit(&frame);
 
 		if (info->oneshot) {
 			*UInt32ListAppend(&oneshots) = info->id;
@@ -255,7 +285,15 @@ void mScriptContextTriggerCallback(struct mScriptContext* context, const char* c
 }
 
 static uint32_t mScriptContextAddCallbackInternal(struct mScriptContext* context, const char* callback, struct mScriptValue* fn, bool oneshot) {
-	if (fn->type->base != mSCRIPT_TYPE_FUNCTION) {
+	if (fn->type == mSCRIPT_TYPE_MS_WEAKREF) {
+		struct mScriptValue* weakref = mScriptContextAccessWeakref(context, fn);
+		if (!weakref) {
+			return 0;
+		}
+		if (weakref->type->base != mSCRIPT_TYPE_FUNCTION) {
+			return 0;
+		}
+	} else if (fn->type->base != mSCRIPT_TYPE_FUNCTION) {
 		return 0;
 	}
 	struct Table* table = HashTableLookup(&context->callbacks, callback);
@@ -396,12 +434,54 @@ bool mScriptContextLoadFile(struct mScriptContext* context, const char* path) {
 	return ret;
 }
 
+struct mScriptContext* mScriptActiveContext(void) {
+	return ThreadLocalGetValue(_threadContext);
+}
+
+bool mScriptContextActivate(struct mScriptContext* context) {
+	struct mScriptContext* threadContext = ThreadLocalGetValue(_threadContext);
+	if (threadContext && threadContext != context) {
+		return false;
+	}
+	if (!threadContext && context->threadDepth) {
+		return false;
+	}
+	++context->threadDepth;
+	if (!threadContext) {
+		ThreadLocalSetKey(_threadContext, context);
+	}
+	return true;
+}
+
+void mScriptContextDeactivate(struct mScriptContext* context) {
+#ifndef NDEBUG
+	struct mScriptContext* threadContext = ThreadLocalGetValue(_threadContext);
+	if (threadContext != context) {
+		abort();
+	}
+#endif
+
+	--context->threadDepth;
+	if (!context->threadDepth) {
+		ThreadLocalSetKey(_threadContext, NULL);
+	}
+}
+
+bool mScriptContextInvoke(struct mScriptContext* context, const struct mScriptValue* fn, struct mScriptFrame* frame) {
+	if (!mScriptContextActivate(context)) {
+		return false;
+	}
+	bool res = mScriptInvoke(fn, frame);
+	mScriptContextDeactivate(context);
+	return res;
+}
+
 bool mScriptInvoke(const struct mScriptValue* val, struct mScriptFrame* frame) {
 	if (val->type->base != mSCRIPT_TYPE_FUNCTION) {
 		return false;
 	}
 	const struct mScriptTypeFunction* signature = &val->type->details.function;
-	if (!mScriptCoerceFrame(&signature->parameters, &frame->arguments)) {
+	if (!mScriptCoerceFrame(&signature->parameters, &frame->arguments, &frame->arguments)) {
 		return false;
 	}
 	const struct mScriptFunction* fn = val->value.opaque;

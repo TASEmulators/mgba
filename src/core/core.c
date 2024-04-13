@@ -127,6 +127,7 @@ struct mCore* mCoreFind(const char* path) {
 }
 
 bool mCoreLoadFile(struct mCore* core, const char* path) {
+	core->unloadROM(core);
 #ifdef FIXED_ROM_BUFFER
 	return mCorePreloadFile(core, path);
 #else
@@ -364,8 +365,8 @@ bool mCoreTakeScreenshotVF(struct mCore* core, struct VFile* vf) {
 	core->currentVideoSize(core, &width, &height);
 	core->getPixels(core, &pixels, &stride);
 	png_structp png = PNGWriteOpen(vf);
-	png_infop info = PNGWriteHeader(png, width, height);
-	bool success = PNGWritePixels(png, width, height, stride, pixels);
+	png_infop info = PNGWriteHeader(png, width, height, mCOLOR_NATIVE);
+	bool success = PNGWritePixels(png, width, height, stride, pixels, mCOLOR_NATIVE);
 	PNGWriteClose(png, info);
 	return success;
 #else
@@ -466,7 +467,7 @@ bool mCoreLoadELF(struct mCore* core, struct ELF* elf) {
 	return true;
 }
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 void mCoreLoadELFSymbols(struct mDebuggerSymbols* symbols, struct ELF* elf) {
 	size_t symIndex = ELFFindSection(elf, ".symtab");
 	size_t names = ELFFindSection(elf, ".strtab");

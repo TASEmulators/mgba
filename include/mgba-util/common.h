@@ -14,11 +14,20 @@
 #define CXX_GUARD_END
 #endif
 
-#ifdef __MINGW32__
-#define __USE_MINGW_ANSI_STDIO 1
-#endif
-
 CXX_GUARD_START
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+// Require Windows 7 or newer
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#elif _WIN32_WINNT < 0x0601
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+// WinSock2 gets very angry if it's included too late
+#include <winsock2.h>
+#endif
 
 #include <assert.h>
 #include <ctype.h>
@@ -35,13 +44,12 @@ CXX_GUARD_START
 #include <string.h>
 #include <time.h>
 
-#ifdef _WIN32
-// WinSock2 gets very angry if it's included too late
-#include <winsock2.h>
-#endif
-
 #if defined(_MSC_VER) || defined(__cplusplus)
 #define restrict __restrict
+#endif
+
+#ifndef containerof
+#define containerof(PTR, TYPE, MEMBER) ((TYPE*) ((uintptr_t) (PTR) - offsetof(TYPE, MEMBER)))
 #endif
 
 #ifdef _MSC_VER

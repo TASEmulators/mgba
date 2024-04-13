@@ -5,9 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/feature/commandline.h>
 
+#include <mgba/core/cheats.h>
 #include <mgba/core/config.h>
+#include <mgba/core/core.h>
 #include <mgba/core/version.h>
 #include <mgba-util/string.h>
+#include <mgba-util/vfs.h>
+
+#ifdef ENABLE_GDB_STUB
+#include <mgba/internal/debugger/gdb-stub.h>
+#endif
+#ifdef USE_EDITLINE
+#include <mgba/internal/debugger/cli-el-backend.h>
+#endif
 
 #include <fcntl.h>
 #ifdef _MSC_VER
@@ -30,7 +40,7 @@ static const struct option _options[] = {
 #ifdef USE_EDITLINE
 	{ "debug",     no_argument, 0, 'd' },
 #endif
-#ifdef USE_GDB_STUB
+#ifdef ENABLE_GDB_STUB
 	{ "gdb",       no_argument, 0, 'g' },
 #endif
 	{ "help",      no_argument, 0, 'h' },
@@ -75,7 +85,7 @@ bool mArgumentsParse(struct mArguments* args, int argc, char* const* argv, struc
 #ifdef USE_EDITLINE
 		"d"
 #endif
-#ifdef USE_GDB_STUB
+#ifdef ENABLE_GDB_STUB
 		"g"
 #endif
 	;
@@ -137,18 +147,14 @@ bool mArgumentsParse(struct mArguments* args, int argc, char* const* argv, struc
 			break;
 #ifdef USE_EDITLINE
 		case 'd':
-			if (args->debuggerType != DEBUGGER_NONE) {
-				return false;
-			}
-			args->debuggerType = DEBUGGER_CLI;
+			args->debugAtStart = true;
+			args->debugCli = true;
 			break;
 #endif
-#ifdef USE_GDB_STUB
+#ifdef ENABLE_GDB_STUB
 		case 'g':
-			if (args->debuggerType != DEBUGGER_NONE) {
-				return false;
-			}
-			args->debuggerType = DEBUGGER_GDB;
+			args->debugAtStart = true;
+			args->debugGdb = true;
 			break;
 #endif
 		case 'h':
@@ -207,6 +213,58 @@ void mArgumentsApply(const struct mArguments* args, struct mSubParser* subparser
 		if (subparsers[i].apply) {
 			subparsers[i].apply(&subparsers[i], config);
 		}
+	}
+}
+
+bool mArgumentsApplyDebugger(const struct mArguments* args, struct mCore* core, struct mDebugger* debugger) {
+	bool hasDebugger = false;
+
+	#ifdef USE_EDITLINE
+	if (args->debugCli) {
+		struct mDebuggerModule* module = mDebuggerCreateModule(DEBUGGER_CLI, core);
+		if (module) {
+			struct CLIDebugger* cliDebugger = (struct CLIDebugger*) module;
+			CLIDebuggerAttachBackend(cliDebugger, CLIDebuggerEditLineBackendCreate());
+			mDebuggerAttachModule(debugger, module);
+			hasDebugger = true;
+		}
+	}
+#endif
+
+#ifdef ENABLE_GDB_STUB
+	if (args->debugGdb) {
+		struct mDebuggerModule* module = mDebuggerCreateModule(DEBUGGER_GDB, core);
+		if (module) {
+			mDebuggerAttachModule(debugger, module);
+			hasDebugger = true;
+		}
+	}
+#endif
+
+	return hasDebugger;
+}
+
+void mArgumentsApplyFileLoads(const struct mArguments* args, struct mCore* core) {
+	if (args->patch) {
+		struct VFile* patch = VFileOpen(args->patch, O_RDONLY);
+		if (patch) {
+			core->loadPatch(core, patch);
+			patch->close(patch);
+		}
+	} else {
+		mCoreAutoloadPatch(core);
+	}
+
+	struct mCheatDevice* device = NULL;
+	if (args->cheatsFile && (device = core->cheatDevice(core))) {
+		struct VFile* vf = VFileOpen(args->cheatsFile, O_RDONLY);
+		if (vf) {
+			mCheatDeviceClear(device);
+			mCheatParseFile(device, vf);
+			vf->close(vf);
+		}
+	} else {
+		mCoreAutoloadCheats(core);
 	}
 }
 
@@ -297,7 +355,7 @@ void usage(const char* arg0, const char* prologue, const char* epilogue, const s
 #ifdef USE_EDITLINE
 	     "  -d, --debug                Use command-line debugger\n"
 #endif
-#ifdef USE_GDB_STUB
+#ifdef ENABLE_GDB_STUB
 	     "  -g, --gdb                  Start GDB session (default port 2345)\n"
 #endif
 	     "  -l, --log-level N          Log level mask\n"

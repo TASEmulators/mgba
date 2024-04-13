@@ -320,18 +320,20 @@ void _gyroReadPins(struct GBACartridgeHardware* hw) {
 		return;
 	}
 
+	// Write bit on falling edge
+	bool doOutput = hw->gyroEdge && !(hw->pinState & 2);
 	if (hw->pinState & 1) {
 		if (gyro->sample) {
 			gyro->sample(gyro);
 		}
 		int32_t sample = gyro->readGyroZ(gyro);
 
-		// Normalize to ~12 bits, focused on 0x6C0
-		hw->gyroSample = (sample >> 21) + 0x6C0; // Crop off an extra bit so that we can't go negative
+		// Normalize to ~12 bits, focused on 0x700
+		hw->gyroSample = (sample >> 21) + 0x700; // Crop off an extra bit so that we can't go negative
+		doOutput = true;
 	}
 
-	if (hw->gyroEdge && !(hw->pinState & 2)) {
-		// Write bit on falling edge
+	if (doOutput) {
 		unsigned bit = hw->gyroSample >> 15;
 		hw->gyroSample <<= 1;
 		_outputPins(hw, bit << 2);
@@ -374,7 +376,9 @@ void _lightReadPins(struct GBACartridgeHardware* hw) {
 		mLOG(GBA_HW, DEBUG, "[SOLAR] Got reset");
 		hw->lightCounter = 0;
 		if (lux) {
-			lux->sample(lux);
+			if (lux->sample) {
+				lux->sample(lux);
+			}
 			hw->lightSample = lux->readLuminance(lux);
 		} else {
 			hw->lightSample = 0xFF;
@@ -421,8 +425,8 @@ void GBAHardwareTiltWrite(struct GBACartridgeHardware* hw, uint32_t address, uin
 			int32_t x = rotationSource->readTiltX(rotationSource);
 			int32_t y = rotationSource->readTiltY(rotationSource);
 			// Normalize to ~12 bits, focused on 0x3A0
-			hw->tiltX = (x >> 21) + 0x3A0; // Crop off an extra bit so that we can't go negative
-			hw->tiltY = (y >> 21) + 0x3A0;
+			hw->tiltX = 0x3A0 - (x >> 22);
+			hw->tiltY = 0x3A0 - (y >> 22);
 		} else {
 			mLOG(GBA_HW, GAME_ERROR, "Tilt sensor wrote wrong byte to %04x: %02x", address, value);
 		}
@@ -522,7 +526,7 @@ void GBAHardwareDeserialize(struct GBACartridgeHardware* hw, const struct GBASer
 	LOAD_32(when, 0, &state->hw.gbpNextEvent);
 	if (hw->devices & HW_GB_PLAYER) {
 		GBASIOSetDriver(&hw->p->sio, &hw->p->sio.gbp.d, SIO_NORMAL_32);
-		if (hw->p->memory.io[REG_SIOCNT >> 1] & 0x0080) {
+		if (hw->p->memory.io[GBA_REG(SIOCNT)] & 0x0080) {
 			mTimingSchedule(&hw->p->timing, &hw->p->sio.gbp.event, when);
 		}
 	}

@@ -19,8 +19,7 @@
 #include "scripting/ScriptingTextBuffer.h"
 #include "scripting/ScriptingTextBufferModel.h"
 
-#include <mgba/script/input.h>
-#include <mgba/script/storage.h>
+#include <mgba/script.h>
 #include <mgba-util/math.h>
 #include <mgba-util/string.h>
 
@@ -71,12 +70,16 @@ void ScriptingController::setController(std::shared_ptr<CoreController> controll
 		return;
 	}
 	clearController();
-	m_controller = controller;
+	if (!controller) {
+		return;
+	}
+	m_controller = std::move(controller);
 	CoreController::Interrupter interrupter(m_controller);
 	m_controller->thread()->scriptContext = &m_scriptContext;
 	if (m_controller->hasStarted()) {
-		mScriptContextAttachCore(&m_scriptContext, m_controller->thread()->core);
+		attach();
 	}
+	updateVideoScale();
 	connect(m_controller.get(), &CoreController::stopping, this, &ScriptingController::clearController);
 }
 
@@ -86,6 +89,11 @@ void ScriptingController::setInputController(InputController* input) {
 	}
 	m_inputController = input;
 	connect(m_inputController, &InputController::updated, this, &ScriptingController::updateGamepad);
+}
+
+void ScriptingController::setVideoBackend(VideoBackend* backend) {
+	m_videoBackend = backend;
+	mScriptCanvasUpdateBackend(&m_scriptContext, backend);
 }
 
 bool ScriptingController::loadFile(const QString& path) {
@@ -108,7 +116,6 @@ bool ScriptingController::load(VFileDevice& vf, const QString& name) {
 	}
 	bool ok = true;
 	if (!m_activeEngine->load(m_activeEngine, utf8.constData(), vf) || !m_activeEngine->run(m_activeEngine)) {
-		emit error(QString::fromUtf8(m_activeEngine->getError(m_activeEngine)));
 		ok = false;
 	}
 	if (m_controller) {
@@ -132,6 +139,13 @@ void ScriptingController::clearController() {
 	m_controller.reset();
 }
 
+void ScriptingController::updateVideoScale() {
+	if (!m_controller) {
+		return;
+	}
+	mScriptCanvasSetInternalScale(&m_scriptContext, m_controller->videoScale());
+}
+
 void ScriptingController::reset() {
 	CoreController::Interrupter interrupter(m_controller);
 	m_bufferModel->reset();
@@ -141,7 +155,7 @@ void ScriptingController::reset() {
 	m_activeEngine = nullptr;
 	init();
 	if (m_controller && m_controller->hasStarted()) {
-		mScriptContextAttachCore(&m_scriptContext, m_controller->thread()->core);
+		attach();
 	}
 }
 
@@ -157,14 +171,16 @@ void ScriptingController::flushStorage() {
 }
 
 bool ScriptingController::eventFilter(QObject* obj, QEvent* ev) {
-	event(obj, ev);
+	scriptingEvent(obj, ev);
 	return false;
 }
 
-void ScriptingController::event(QObject* obj, QEvent* event) {
+void ScriptingController::scriptingEvent(QObject* obj, QEvent* event) {
 	if (!m_controller) {
 		return;
 	}
+
+	CoreController::Interrupter interrupter(m_controller);
 
 	switch (event->type()) {
 	case QEvent::FocusOut:
@@ -173,7 +189,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 		return;
 	case QEvent::KeyPress:
 	case QEvent::KeyRelease: {
-		struct mScriptKeyEvent ev{mSCRIPT_EV_TYPE_KEY};
+		struct mScriptKeyEvent ev{{mSCRIPT_EV_TYPE_KEY}};
 		auto keyEvent = static_cast<QKeyEvent*>(event);
 		ev.state = event->type() == QEvent::KeyRelease ? mSCRIPT_INPUT_STATE_UP :
 			static_cast<QKeyEvent*>(event)->isAutoRepeat() ? mSCRIPT_INPUT_STATE_HELD : mSCRIPT_INPUT_STATE_DOWN;
@@ -184,7 +200,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 	}
 	case QEvent::MouseButtonPress:
 	case QEvent::MouseButtonRelease: {
-		struct mScriptMouseButtonEvent ev{mSCRIPT_EV_TYPE_MOUSE_BUTTON};
+		struct mScriptMouseButtonEvent ev{{mSCRIPT_EV_TYPE_MOUSE_BUTTON}};
 		auto mouseEvent = static_cast<QMouseEvent*>(event);
 		ev.mouse = 0;
 		ev.state = event->type() == QEvent::MouseButtonPress ? mSCRIPT_INPUT_STATE_DOWN : mSCRIPT_INPUT_STATE_UP;
@@ -193,7 +209,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 		return;
 	}
 	case QEvent::MouseMove: {
-		struct mScriptMouseMoveEvent ev{mSCRIPT_EV_TYPE_MOUSE_MOVE};
+		struct mScriptMouseMoveEvent ev{{mSCRIPT_EV_TYPE_MOUSE_MOVE}};
 		auto mouseEvent = static_cast<QMouseEvent*>(event);
 		QPoint pos = mouseEvent->pos();
 		pos = static_cast<Display*>(obj)->normalizedPoint(m_controller.get(), pos);
@@ -204,7 +220,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 		return;
 	}
 	case QEvent::Wheel: {
-		struct mScriptMouseWheelEvent ev{mSCRIPT_EV_TYPE_MOUSE_WHEEL};
+		struct mScriptMouseWheelEvent ev{{mSCRIPT_EV_TYPE_MOUSE_WHEEL}};
 		auto wheelEvent = static_cast<QWheelEvent*>(event);
 		QPoint adelta = wheelEvent->angleDelta();
 		QPoint pdelta = wheelEvent->pixelDelta();
@@ -225,7 +241,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 
 	auto type = event->type();
 	if (type == GamepadButtonEvent::Down() || type == GamepadButtonEvent::Up()) {
-		struct mScriptGamepadButtonEvent ev{mSCRIPT_EV_TYPE_GAMEPAD_BUTTON};
+		struct mScriptGamepadButtonEvent ev{{mSCRIPT_EV_TYPE_GAMEPAD_BUTTON}};
 		auto gamepadEvent = static_cast<GamepadButtonEvent*>(event);
 		ev.pad = 0;
 		ev.state = event->type() == GamepadButtonEvent::Down() ? mSCRIPT_INPUT_STATE_DOWN : mSCRIPT_INPUT_STATE_UP;
@@ -233,7 +249,7 @@ void ScriptingController::event(QObject* obj, QEvent* event) {
 		mScriptContextFireEvent(&m_scriptContext, &ev.d);
 	}
 	if (type == GamepadHatEvent::Type()) {
-		struct mScriptGamepadHatEvent ev{mSCRIPT_EV_TYPE_GAMEPAD_HAT};
+		struct mScriptGamepadHatEvent ev{{mSCRIPT_EV_TYPE_GAMEPAD_HAT}};
 		updateGamepad();
 		auto gamepadEvent = static_cast<GamepadHatEvent*>(event);
 		ev.pad = 0;
@@ -249,7 +265,7 @@ void ScriptingController::updateGamepad() {
 		detachGamepad();
 		return;
 	}
-	Gamepad* gamepad = driver->activeGamepad();
+	std::shared_ptr<Gamepad> gamepad = driver->activeGamepad();
 	if (!gamepad) {
 		detachGamepad();
 		return;
@@ -283,6 +299,14 @@ void ScriptingController::updateGamepad() {
 	}
 }
 
+void ScriptingController::attach() {
+	CoreController::Interrupter interrupter(m_controller);
+	mScriptContextAttachCore(&m_scriptContext, m_controller->thread()->core);
+#ifdef ENABLE_DEBUGGERS
+	m_controller->attachDebugger(false);
+#endif
+}
+
 void ScriptingController::attachGamepad() {
 	mScriptGamepad* pad = mScriptContextGamepadLookup(&m_scriptContext, 0);
 	if (pad == &m_gamepad) {
@@ -305,15 +329,18 @@ void ScriptingController::detachGamepad() {
 void ScriptingController::init() {
 	mScriptContextInit(&m_scriptContext);
 	mScriptContextAttachStdlib(&m_scriptContext);
+	mScriptContextAttachCanvas(&m_scriptContext);
+	mScriptContextAttachImage(&m_scriptContext);
+	mScriptContextAttachInput(&m_scriptContext);
+	mScriptContextAttachSocket(&m_scriptContext);
 #ifdef USE_JSON_C
 	mScriptContextAttachStorage(&m_scriptContext);
 #endif
-	mScriptContextAttachSocket(&m_scriptContext);
-	mScriptContextAttachInput(&m_scriptContext);
 	mScriptContextRegisterEngines(&m_scriptContext);
 
 	mScriptContextAttachLogger(&m_scriptContext, &m_logger);
 	m_bufferModel->attachToContext(&m_scriptContext);
+	mScriptCanvasUpdateBackend(&m_scriptContext, m_videoBackend);
 
 	HashTableEnumerate(&m_scriptContext.engines, [](const char* key, void* engine, void* context) {
 	ScriptingController* self = static_cast<ScriptingController*>(context);

@@ -49,6 +49,10 @@ CoreController::CoreController(mCore* core, QObject* parent)
 	GBASIODolphinCreate(&m_dolphin);
 #endif
 
+#ifdef ENABLE_DEBUGGERS
+	mDebuggerInit(&m_debugger);
+#endif
+
 	m_resetActions.append([this]() {
 		if (m_autoload) {
 			mCoreLoadState(m_threadContext.core, 0, m_loadStateFlags);
@@ -75,6 +79,11 @@ CoreController::CoreController(mCore* core, QObject* parent)
 			controller->updatePlayerSave();
 		}
 
+		if (controller->m_override) {
+			controller->m_override->identify(context->core);
+			context->core->setOverride(context->core, controller->m_override->raw());
+		}
+
 		QMetaObject::invokeMethod(controller, "started");
 	};
 
@@ -82,11 +91,6 @@ CoreController::CoreController(mCore* core, QObject* parent)
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 		for (auto& action : controller->m_resetActions) {
 			action();
-		}
-
-		if (controller->m_override) {
-			controller->m_override->identify(context->core);
-			controller->m_override->apply(context->core);
 		}
 
 		controller->m_resetActions.clear();
@@ -214,6 +218,10 @@ CoreController::~CoreController() {
 
 	mCoreThreadJoin(&m_threadContext);
 
+#ifdef ENABLE_DEBUGGERS
+	mDebuggerDeinit(&m_debugger);
+#endif
+
 	if (m_cacheSet) {
 		mCacheSetDeinit(m_cacheSet.get());
 		m_cacheSet.reset();
@@ -221,6 +229,11 @@ CoreController::~CoreController() {
 
 	mCoreConfigDeinit(&m_threadContext.core->config);
 	m_threadContext.core->deinit(m_threadContext.core);
+}
+
+void CoreController::setPath(const QString& path, const QString& base) {
+	m_path = path;
+	m_baseDirectory = base;
 }
 
 const color_t* CoreController::drawContext() {
@@ -318,15 +331,36 @@ void CoreController::loadConfig(ConfigController* config) {
 #endif
 }
 
-#ifdef USE_DEBUGGERS
-void CoreController::setDebugger(mDebugger* debugger) {
+#ifdef ENABLE_DEBUGGERS
+void CoreController::attachDebugger(bool interrupt) {
 	Interrupter interrupter(this);
-	if (debugger) {
-		mDebuggerAttach(debugger, m_threadContext.core);
-		mDebuggerEnter(debugger, DEBUGGER_ENTER_ATTACHED, 0);
-	} else {
-		m_threadContext.core->detachDebugger(m_threadContext.core);
+	if (!m_threadContext.core->debugger) {
+		mDebuggerAttach(&m_debugger, m_threadContext.core);
 	}
+	if (interrupt) {
+		mDebuggerEnter(&m_debugger, DEBUGGER_ENTER_ATTACHED, 0);
+	}
+}
+
+void CoreController::detachDebugger() {
+	Interrupter interrupter(this);
+	if (!m_threadContext.core->debugger) {
+		return;
+	}
+	m_threadContext.core->detachDebugger(m_threadContext.core);
+}
+
+void CoreController::attachDebuggerModule(mDebuggerModule* module, bool interrupt) {
+	Interrupter interrupter(this);
+	if (module) {
+		mDebuggerAttachModule(&m_debugger, module);
+	}
+	attachDebugger(interrupt);
+}
+
+void CoreController::detachDebuggerModule(mDebuggerModule* module) {
+	Interrupter interrupter(this);
+	mDebuggerDetachModule(&m_debugger, module);
 }
 #endif
 
@@ -444,8 +478,8 @@ void CoreController::start() {
 
 void CoreController::stop() {
 	setSync(false);
-#ifdef USE_DEBUGGERS
-	setDebugger(nullptr);
+#ifdef ENABLE_DEBUGGERS
+	detachDebugger();
 #endif
 	setPaused(false);
 	mCoreThreadEnd(&m_threadContext);
@@ -522,11 +556,7 @@ void CoreController::rewind(int states) {
 	if (!states) {
 		states = INT_MAX;
 	}
-	for (int i = 0; i < states; ++i) {
-		if (!mCoreRewindRestore(&m_threadContext.impl->rewind, m_threadContext.core)) {
-			break;
-		}
-	}
+	mCoreRewindRestore(&m_threadContext.impl->rewind, m_threadContext.core, states);
 	interrupter.resume();
 	emit frameAvailable();
 	emit rewound();
@@ -779,10 +809,16 @@ void CoreController::loadSave(const QString& path, bool temporary) {
 			return;
 		}
 
+		bool ok;
 		if (temporary) {
-			m_threadContext.core->loadTemporarySave(m_threadContext.core, vf);
+			ok = m_threadContext.core->loadTemporarySave(m_threadContext.core, vf);
 		} else {
-			m_threadContext.core->loadSave(m_threadContext.core, vf);
+			ok = m_threadContext.core->loadSave(m_threadContext.core, vf);
+		}
+		if (!ok) {
+			vf->close(vf);
+		} else {
+			m_savePath = path;
 		}
 	});
 	if (hasStarted()) {
@@ -790,12 +826,18 @@ void CoreController::loadSave(const QString& path, bool temporary) {
 	}
 }
 
-void CoreController::loadSave(VFile* vf, bool temporary) {
-	m_resetActions.append([this, vf, temporary]() {
+void CoreController::loadSave(VFile* vf, bool temporary, const QString& path) {
+	m_resetActions.append([this, vf, temporary, path]() {
+		bool ok;
 		if (temporary) {
-			m_threadContext.core->loadTemporarySave(m_threadContext.core, vf);
+			ok = m_threadContext.core->loadTemporarySave(m_threadContext.core, vf);
 		} else {
-			m_threadContext.core->loadSave(m_threadContext.core, vf);
+			ok = m_threadContext.core->loadSave(m_threadContext.core, vf);
+		}
+		if (!ok) {
+			vf->close(vf);
+		} else {
+			m_savePath = path;
 		}
 	});
 	if (hasStarted()) {
@@ -832,6 +874,7 @@ void CoreController::replaceGame(const QString& path) {
 	} else {
 		mCoreLoadFile(m_threadContext.core, fname.toUtf8().constData());
 	}
+	// TODO: Make sure updating the path is handled properly by everything that calls path() and baseDirectory()
 	updateROMInfo();
 }
 
@@ -933,7 +976,7 @@ void CoreController::scanCard(const QString& path) {
 			}
 		}
 		scanCards(lines);
-		m_eReaderData = eReaderData;
+		m_eReaderData = std::move(eReaderData);
 	} else if (image.size() == QSize(989, 44) || image.size() == QSize(639, 44)) {
 		const uchar* bits = image.constBits();
 		size_t size;
@@ -998,9 +1041,9 @@ void CoreController::attachPrinter() {
 	}
 	GB* gb = static_cast<GB*>(m_threadContext.core->board);
 	clearMultiplayerController();
-	GBPrinterCreate(&m_printer.d);
+	GBPrinterCreate(&m_printer);
 	m_printer.parent = this;
-	m_printer.d.print = [](GBPrinter* printer, int height, const uint8_t* data) {
+	m_printer.print = [](GBPrinter* printer, int height, const uint8_t* data) {
 		QGBPrinter* qPrinter = reinterpret_cast<QGBPrinter*>(printer);
 		QImage image(GB_VIDEO_HORIZONTAL_PIXELS, height, QImage::Format_Indexed8);
 		QVector<QRgb> colors;
@@ -1008,7 +1051,7 @@ void CoreController::attachPrinter() {
 		colors.append(qRgb(0xA8, 0xA8, 0xA8));
 		colors.append(qRgb(0x50, 0x50, 0x50));
 		colors.append(qRgb(0x00, 0x00, 0x00));
-		image.setColorTable(colors);
+		image.setColorTable(std::move(colors));
 		for (int y = 0; y < height; ++y) {
 			for (int x = 0; x < GB_VIDEO_HORIZONTAL_PIXELS; x += 4) {
 				uint8_t byte = data[(x + y * GB_VIDEO_HORIZONTAL_PIXELS) / 4];
@@ -1021,7 +1064,7 @@ void CoreController::attachPrinter() {
 		QMetaObject::invokeMethod(qPrinter->parent, "imagePrinted", Q_ARG(const QImage&, image));
 	};
 	Interrupter interrupter(this);
-	GBSIOSetDriver(&gb->sio, &m_printer.d.d);
+	GBSIOSetDriver(&gb->sio, &m_printer.d);
 }
 
 void CoreController::detachPrinter() {
@@ -1030,7 +1073,7 @@ void CoreController::detachPrinter() {
 	}
 	Interrupter interrupter(this);
 	GB* gb = static_cast<GB*>(m_threadContext.core->board);
-	GBPrinterDonePrinting(&m_printer.d);
+	GBPrinterDonePrinting(&m_printer);
 	GBSIOSetDriver(&gb->sio, nullptr);
 }
 
@@ -1039,7 +1082,7 @@ void CoreController::endPrint() {
 		return;
 	}
 	Interrupter interrupter(this);
-	GBPrinterDonePrinting(&m_printer.d);
+	GBPrinterDonePrinting(&m_printer);
 }
 #endif
 
@@ -1210,16 +1253,7 @@ void CoreController::finishFrame() {
 }
 
 void CoreController::updatePlayerSave() {
-	int savePlayerId = 0;
-	mCoreConfigGetIntValue(&m_threadContext.core->config, "savePlayerId", &savePlayerId);
-	if (savePlayerId == 0 || m_multiplayer->attached() > 1) {
-		if (savePlayerId == m_multiplayer->playerId(this) + 1) {
-			// Player 1 is using our save, so let's use theirs, at least for now.
-			savePlayerId = 1;
-		} else {
-			savePlayerId = m_multiplayer->playerId(this) + 1;
-		}
-	}
+	int savePlayerId = m_multiplayer->saveId(this);
 
 	QString saveSuffix;
 	if (savePlayerId < 2) {
@@ -1230,7 +1264,11 @@ void CoreController::updatePlayerSave() {
 	QByteArray saveSuffixBin(saveSuffix.toUtf8());
 	VFile* save = mDirectorySetOpenSuffix(&m_threadContext.core->dirs, m_threadContext.core->dirs.save, saveSuffixBin.constData(), O_CREAT | O_RDWR);
 	if (save) {
-		m_threadContext.core->loadSave(m_threadContext.core, save);
+		if (!m_threadContext.core->loadSave(m_threadContext.core, save)) {
+			save->close(save);
+		} else {
+			m_savePath = QString::fromUtf8(m_threadContext.core->dirs.baseName) + saveSuffix;
+		}
 	}
 }
 

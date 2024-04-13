@@ -7,7 +7,7 @@
 
 #include "DebuggerController.h"
 
-#ifdef USE_GDB_STUB
+#ifdef ENABLE_GDB_STUB
 
 #include <mgba/internal/debugger/gdb-stub.h>
 
@@ -23,7 +23,6 @@ public:
 
 public:
 	ushort port();
-	bool isAttached();
 
 public slots:
 	void setPort(ushort port);

@@ -12,7 +12,7 @@
 #include <mgba/internal/gba/gba.h>
 #ifdef M_CORE_GB
 #include <mgba/internal/gb/gb.h>
-#include <mgba/internal/gb/overrides.h>
+#include <mgba/gb/interface.h>
 #endif
 #include <mgba-util/gui/file-select.h>
 #include <mgba-util/gui/menu.h>
@@ -31,7 +31,7 @@ static bool _biosNamed(const char* name) {
 	char ext[PATH_MAX + 1] = {};
 	separatePath(name, NULL, NULL, ext);
 
-	if (strstr(name, "bios")) {
+	if (strcasestr(name, "bios")) {
 		return true;
 	}
 	if (!strncmp(ext, "bin", PATH_MAX)) {

@@ -1156,7 +1156,7 @@ size_t retro_get_memory_size(unsigned id) {
 #ifdef M_CORE_GBA
 		case mPLATFORM_GBA:
 			switch (((struct GBA*) core->board)->memory.savedata.type) {
-			case SAVEDATA_AUTODETECT:
+			case GBA_SAVEDATA_AUTODETECT:
 				return GBA_SIZE_FLASH1M;
 			default:
 				return GBASavedataSize(&((struct GBA*) core->board)->memory.savedata);
@@ -1390,7 +1390,7 @@ static void _updateRotation(struct mRotationSource* source) {
 		tiltY = sensorGetCallback(0, RETRO_SENSOR_ACCELEROMETER_Y) * 2e8f;
 	}
 	if (gyroEnabled) {
-		gyroZ = sensorGetCallback(0, RETRO_SENSOR_GYROSCOPE_Z) * -1.1e9f;
+		gyroZ = sensorGetCallback(0, RETRO_SENSOR_GYROSCOPE_Z) * -5.5e8f;
 	}
 }
 

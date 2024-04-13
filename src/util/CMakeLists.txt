@@ -19,6 +19,7 @@ set(SOURCE_FILES
 	image.c
 	image/export.c
 	image/png-io.c
+	interpolator.c
 	patch.c
 	patch-fast.c
 	patch-ips.c
@@ -35,6 +36,7 @@ set(GUI_FILES
 	gui/menu.c)
 
 set(TEST_FILES
+	test/circle-buffer.c
 	test/color.c
 	test/geometry.c
 	test/image.c

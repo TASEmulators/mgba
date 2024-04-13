@@ -77,31 +77,71 @@ enum mColorFormat {
 	mCOLOR_RGB8   = 0x10000,
 	mCOLOR_BGR8   = 0x20000,
 	mCOLOR_L8     = 0x40000,
+	mCOLOR_PAL8   = 0x80000,
 
 	mCOLOR_ANY    = -1
 };
 
+#ifndef COLOR_16_BIT
+#define mCOLOR_NATIVE mCOLOR_XBGR8
+#elif !defined(COLOR_5_6_5)
+#define mCOLOR_NATIVE mCOLOR_BGR5
+#else
+#define mCOLOR_NATIVE mCOLOR_RGB565
+#endif
+
 struct mImage {
 	void* data;
+	uint32_t* palette;
 	unsigned width;
 	unsigned height;
 	unsigned stride;
 	unsigned depth;
+	unsigned palSize;
 	enum mColorFormat format;
+};
+
+struct mPainter {
+	struct mImage* backing;
+	bool blend;
+	bool fill;
+	unsigned strokeWidth;
+	uint32_t strokeColor;
+	uint32_t fillColor;
 };
 
 struct VFile;
 struct mImage* mImageCreate(unsigned width, unsigned height, enum mColorFormat format);
+struct mImage* mImageCreateWithStride(unsigned width, unsigned height, unsigned stride, enum mColorFormat format);
+struct mImage* mImageCreateFromConstBuffer(unsigned width, unsigned height, unsigned stride, enum mColorFormat format, const void* pixels);
 struct mImage* mImageLoad(const char* path);
 struct mImage* mImageLoadVF(struct VFile* vf);
+struct mImage* mImageConvertToFormat(const struct mImage*, enum mColorFormat format);
 void mImageDestroy(struct mImage*);
+
+bool mImageSave(const struct mImage*, const char* path, const char* format);
+bool mImageSaveVF(const struct mImage*, struct VFile* vf, const char* format);
 
 uint32_t mImageGetPixel(const struct mImage* image, unsigned x, unsigned y);
 uint32_t mImageGetPixelRaw(const struct mImage* image, unsigned x, unsigned y);
 void mImageSetPixel(struct mImage* image, unsigned x, unsigned y, uint32_t color);
 void mImageSetPixelRaw(struct mImage* image, unsigned x, unsigned y, uint32_t color);
 
+void mImageSetPaletteSize(struct mImage* image, unsigned count);
+void mImageSetPaletteEntry(struct mImage* image, unsigned index, uint32_t color);
+
+void mImageBlit(struct mImage* image, const struct mImage* source, int x, int y);
+void mImageComposite(struct mImage* image, const struct mImage* source, int x, int y);
+void mImageCompositeWithAlpha(struct mImage* image, const struct mImage* source, int x, int y, float alpha);
+
+void mPainterInit(struct mPainter*, struct mImage* backing);
+void mPainterDrawRectangle(struct mPainter*, int x, int y, int width, int height);
+void mPainterDrawLine(struct mPainter*, int x1, int y1, int x2, int y2);
+void mPainterDrawCircle(struct mPainter*, int x, int y, int diameter);
+void mPainterDrawMask(struct mPainter*, const struct mImage* mask, int x, int y);
+
 uint32_t mColorConvert(uint32_t color, enum mColorFormat from, enum mColorFormat to);
+uint32_t mImageColorConvert(uint32_t color, const struct mImage* from, enum mColorFormat to);
 
 #ifndef PYCPARSE
 static inline unsigned mColorFormatBytes(enum mColorFormat format) {
@@ -128,11 +168,42 @@ static inline unsigned mColorFormatBytes(enum mColorFormat format) {
 	case mCOLOR_BGR8:
 		return 3;
 	case mCOLOR_L8:
+	case mCOLOR_PAL8:
 		return 1;
 	case mCOLOR_ANY:
 		break;
 	}
 	return 0;
+}
+
+static inline bool mColorFormatHasAlpha(enum mColorFormat format) {
+	switch (format) {
+	case mCOLOR_XBGR8:
+	case mCOLOR_XRGB8:
+	case mCOLOR_BGRX8:
+	case mCOLOR_RGBX8:
+	case mCOLOR_RGB5:
+	case mCOLOR_BGR5:
+	case mCOLOR_RGB565:
+	case mCOLOR_BGR565:
+	case mCOLOR_RGB8:
+	case mCOLOR_BGR8:
+	case mCOLOR_L8:
+		return false;
+	case mCOLOR_ABGR8:
+	case mCOLOR_ARGB8:
+	case mCOLOR_BGRA8:
+	case mCOLOR_RGBA8:
+	case mCOLOR_ARGB5:
+	case mCOLOR_ABGR5:
+	case mCOLOR_RGBA5:
+	case mCOLOR_BGRA5:
+	case mCOLOR_PAL8:
+		return true;
+	case mCOLOR_ANY:
+		break;
+	}
+	return false;
 }
 
 static inline color_t mColorFrom555(uint16_t value) {
@@ -212,6 +283,113 @@ ATTRIBUTE_UNUSED static unsigned mColorMix5Bit(int weightA, unsigned colorA, int
 	}
 #endif
 	return c;
+}
+
+ATTRIBUTE_UNUSED static uint32_t mColorMixARGB8(uint32_t colorA, uint32_t colorB) {
+	uint32_t alphaA = colorA >> 24;
+	if (!alphaA) {
+		return colorB;
+	}
+	uint32_t alphaB = colorB >> 24;
+	uint32_t color = 0;
+
+#if 1
+	// TODO: Benchmark integer and float versions
+	uint32_t a, b;
+	uint32_t alpha = (alphaA * 0xFF) + alphaB * (0xFF - alphaA);
+
+	a = colorA & 0xFF;
+	a *= alphaA * 0xFF;
+	b = a;
+
+	a = colorB & 0xFF;
+	a *= alphaB * (0xFF - alphaA);
+	b += a;
+
+	b /= alpha;
+	if (b > 0xFF) {
+		color |= 0xFF;
+	} else {
+		color |= b;
+	}
+
+	a = (colorA >> 8) & 0xFF;
+	a *= alphaA * 0xFF;
+	b = a;
+
+	a = (colorB >> 8) & 0xFF;
+	a *= alphaB * (0xFF - alphaA);
+	b += a;
+
+	b /= alpha;
+	if (b > 0xFF) {
+		color |= 0xFF00;
+	} else {
+		color |= b << 8;
+	}
+
+	a = (colorA >> 16) & 0xFF;
+	a *= alphaA * 0xFF;
+	b = a;
+
+	a = (colorB >> 16) & 0xFF;
+	a *= alphaB * (0xFF - alphaA);
+	b += a;
+
+	b /= alpha;
+	if (b > 0xFF) {
+		color |= 0xFF0000;
+	} else {
+		color |= b << 16;
+	}
+
+	alpha /= 0xFF;
+	if (alpha > 0xFF) {
+		color |= 0xFF000000;
+	} else {
+		color |= alpha << 24;
+	}
+#else
+	float ca, aa;
+	float cb, ab;
+
+	static const float r255 = 1 / 255.f;
+	aa = alphaA * r255;
+	ab = alphaB * r255;
+	float alpha = aa + ab * (1.f - aa);
+	float ralpha = 1.f / alpha;
+	alpha = alpha * 255.f;
+	color = ((int) alpha) << 24;
+
+	ca = ((colorA >> 16) & 0xFF) * r255;
+	cb = ((colorB >> 16) & 0xFF) * r255;
+	ca = ca * aa + cb * ab * (1.f - aa);
+	ca = ca * ralpha * 255.f;
+	if (ca > 255.f) {
+		ca = 255.f;
+	}
+	color |= ((int) ca) << 16;
+
+	ca = ((colorA >> 8) & 0xFF) * r255;
+	cb = ((colorB >> 8) & 0xFF) * r255;
+	ca = ca * aa + cb * ab * (1.f - aa);
+	ca = ca * ralpha * 255.f;
+	if (ca > 255.f) {
+		ca = 255.f;
+	}
+	color |= ((int) ca) << 8;
+
+	ca = (colorA & 0xFF) * r255;
+	cb = (colorB & 0xFF) * r255;
+	ca = ca * aa + cb * ab * (1.f - aa);
+	ca = ca * ralpha * 255.f;
+	if (ca > 255.f) {
+		ca = 255.f;
+	}
+	color |= (int) ca;
+#endif
+
+	return color;
 }
 #endif
 

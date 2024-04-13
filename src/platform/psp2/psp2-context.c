@@ -129,7 +129,7 @@ static THREAD_ENTRY _audioThread(void* context) {
 		sceAudioOutOutput(audioPort, buffer);
 	}
 	sceAudioOutReleasePort(audioPort);
-	return 0;
+	THREAD_EXIT(0);
 }
 
 static void _sampleRotation(struct mRotationSource* source) {
@@ -149,7 +149,7 @@ static int32_t _readTiltY(struct mRotationSource* source) {
 
 static int32_t _readGyroZ(struct mRotationSource* source) {
 	struct mSceRotationSource* rotation = (struct mSceRotationSource*) source;
-	return rotation->state.gyro.z * -0x10000000;
+	return rotation->state.gyro.z * -0x8000000;
 }
 
 static void _setRumble(struct mRumble* source, int enable) {

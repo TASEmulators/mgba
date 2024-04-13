@@ -14,6 +14,7 @@
 #include "MessagePainter.h"
 
 struct VDir;
+struct VideoBackend;
 struct VideoShader;
 
 namespace QGBA {
@@ -57,8 +58,9 @@ public:
 	virtual void setBackgroundImage(const QImage&) = 0;
 	virtual QSize contentSize() const = 0;
 
-	virtual void setVideoProxy(std::shared_ptr<VideoProxy> proxy) { m_videoProxy = proxy; }
+	virtual void setVideoProxy(std::shared_ptr<VideoProxy> proxy) { m_videoProxy = std::move(proxy); }
 	std::shared_ptr<VideoProxy> videoProxy() { return m_videoProxy; }
+	virtual VideoBackend* videoBackend();
 	
 signals:
 	void drawingStarted();
@@ -76,6 +78,7 @@ public slots:
 	virtual void showOSDMessages(bool enable);
 	virtual void showFrameCounter(bool enable);
 	virtual void filter(bool filter);
+	virtual void swapInterval(int interval) = 0;
 	virtual void framePosted() = 0;
 	virtual void setShaders(struct VDir*) = 0;
 	virtual void clearShaders() = 0;

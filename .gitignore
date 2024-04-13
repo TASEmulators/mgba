@@ -1,12 +1,15 @@
+# Generic files
 *.user*
 *~
 *.swp
 *.pyc
 
+# Build directories
 /build
 /build-*
 /.vs
 
+# Build files
 *.a
 *.dylib
 *.dll
@@ -17,5 +20,14 @@
 CMakeCache.txt
 CMakeFiles
 CMakeSettings.json
+CMakeUserPresets.json
+compile_commands.json
+/.cache
+/.vscode
 cmake_install.cmake
+hle-bios.bin
 version.c
+
+# Runtime generated cruft
+*.sav
+*.ss0

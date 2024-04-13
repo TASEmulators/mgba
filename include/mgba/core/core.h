@@ -18,7 +18,7 @@ CXX_GUARD_START
 #include <mgba/core/input.h>
 #endif
 #include <mgba/core/interface.h>
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 #include <mgba/debugger/debugger.h>
 #endif
 
@@ -65,6 +65,7 @@ struct mCore {
 	void (*setSync)(struct mCore*, struct mCoreSync*);
 	void (*loadConfig)(struct mCore*, const struct mCoreConfig*);
 	void (*reloadConfigOption)(struct mCore*, const char* option, const struct mCoreConfig*);
+	void (*setOverride)(struct mCore*, const void* override);
 
 	void (*baseVideoSize)(const struct mCore*, unsigned* width, unsigned* height);
 	void (*currentVideoSize)(const struct mCore*, unsigned* width, unsigned* height);
@@ -120,6 +121,7 @@ struct mCore {
 	void (*getGameCode)(const struct mCore*, char* title);
 
 	void (*setPeripheral)(struct mCore*, int type, void*);
+	void* (*getPeripheral)(struct mCore*, int type);
 
 	uint32_t (*busRead8)(struct mCore*, uint32_t address);
 	uint32_t (*busRead16)(struct mCore*, uint32_t address);
@@ -144,7 +146,7 @@ struct mCore {
 	bool (*readRegister)(const struct mCore*, const char* name, void* out);
 	bool (*writeRegister)(struct mCore*, const char* name, const void* in);
 
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 	bool (*supportsDebuggerType)(struct mCore*, enum mDebuggerType);
 	struct mDebuggerPlatform* (*debuggerPlatform)(struct mCore*);
 	struct CLIDebuggerSystem* (*cliDebuggerSystem)(struct mCore*);
@@ -217,7 +219,7 @@ const struct mCoreMemoryBlock* mCoreGetMemoryBlockInfo(struct mCore* core, uint3
 #ifdef USE_ELF
 struct ELF;
 bool mCoreLoadELF(struct mCore* core, struct ELF* elf);
-#ifdef USE_DEBUGGERS
+#ifdef ENABLE_DEBUGGERS
 void mCoreLoadELFSymbols(struct mDebuggerSymbols* symbols, struct ELF*);
 #endif
 #endif
