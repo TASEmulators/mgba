@@ -60,6 +60,7 @@ typedef struct
 	struct VFile* sramvf;
 	struct mKeyCallback keysource;
 	struct mRotationSource rotsource;
+	struct mRumble rumble;
 	struct mRTCSource rtcsource;
 	struct GBALuminanceSource lumasource;
 	struct mDebugger debugger;
@@ -76,6 +77,7 @@ typedef struct
 	bool skipbios;
 	uint32_t palette[0x10000];
 	void (*input_callback)(void);
+	void (*rumble_callback)(int enable);
 	void (*trace_callback)(const char *buffer);
 	void (*exec_callback)(uint32_t pc);
 	void (*mem_callback)(uint32_t addr, enum mWatchpointType type, uint32_t oldValue, uint32_t newValue);
@@ -113,6 +115,11 @@ static void RotationCB(struct mRotationSource* rotationSource)
 	bizctx* ctx = container_of(rotationSource, bizctx, rotsource);
 	ctx->input_callback();
 	ctx->lagged = false;
+}
+static void SetRumble(struct mRumble* rumble, int enable)
+{
+	bizctx* ctx = container_of(rumble, bizctx, rumble);
+	ctx->rumble_callback(enable);
 }
 static void LightCB(struct GBALuminanceSource* luminanceSource)
 {
@@ -195,6 +202,11 @@ void exec_hook(struct mDebuggerModule* module)
 EXP void BizSetInputCallback(bizctx* ctx, void(*callback)(void))
 {
 	ctx->input_callback = callback;
+}
+
+EXP void BizSetRumbleCallback(bizctx* ctx, void(*callback)(int enable))
+{
+	ctx->rumble_callback = callback;
 }
 
 EXP void BizSetTraceCallback(bizctx* ctx, void(*callback)(const char *buffer))
@@ -321,12 +333,14 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 	ctx->rotsource.readTiltX = GetX;
 	ctx->rotsource.readTiltY = GetY;
 	ctx->rotsource.readGyroZ = GetZ;
+	ctx->rumble.setRumble = SetRumble;
 	ctx->lumasource.sample = LightCB;
 	ctx->lumasource.readLuminance = GetLight;
 	ctx->rtcsource.sample = TimeCB;
 	ctx->rtcsource.unixTime = GetTime;
 	
 	ctx->core->setPeripheral(ctx->core, mPERIPH_ROTATION, &ctx->rotsource);
+	ctx->core->setPeripheral(ctx->core, mPERIPH_RUMBLE, &ctx->rumble);
 	ctx->core->setPeripheral(ctx->core, mPERIPH_GBA_LUMINANCE, &ctx->lumasource);
 
 	if (bios)
