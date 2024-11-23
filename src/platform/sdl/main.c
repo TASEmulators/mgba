@@ -133,11 +133,7 @@ int main(int argc, char** argv) {
 		mSDLGLCreate(&renderer);
 	} else
 #elif defined(BUILD_GLES2) || defined(USE_EPOXY)
-#ifdef BUILD_RASPI
-	mRPIGLCommonInit(&renderer);
-#else
 	if (mSDLGLCommonInit(&renderer))
-#endif
 	{
 		mSDLGLES2Create(&renderer);
 	} else
@@ -161,7 +157,7 @@ int main(int argc, char** argv) {
 	mSDLPlayerLoadConfig(&renderer.player, mCoreConfigGetInput(&renderer.core->config));
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-	renderer.core->setPeripheral(renderer.core, mPERIPH_RUMBLE, &renderer.player.rumble.d);
+	renderer.core->setPeripheral(renderer.core, mPERIPH_RUMBLE, &renderer.player.rumble.d.d);
 #endif
 
 	int ret;

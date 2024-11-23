@@ -129,6 +129,7 @@ void mScriptBridgeRun(struct mScriptBridge* sb) {
 	HashTableEnumerate(&sb->engines, _seRun, NULL);
 }
 
+#ifdef ENABLE_VFS
 bool mScriptBridgeLoadScript(struct mScriptBridge* sb, const char* name) {
 	struct VFile* vf = VFileOpen(name, O_RDONLY);
 	if (!vf) {
@@ -143,6 +144,7 @@ bool mScriptBridgeLoadScript(struct mScriptBridge* sb, const char* name) {
 	vf->close(vf);
 	return info.success;
 }
+#endif
 
 bool mScriptBridgeLookupSymbol(struct mScriptBridge* sb, const char* name, int32_t* out) {
 	struct mScriptSymbol info = {
@@ -194,6 +196,7 @@ struct mScriptCoreAdapter {
 	struct mScriptDebugger debugger;
 #endif
 	struct mRumble rumble;
+	struct mRumbleIntegrator rumbleIntegrator;
 	struct mRumble* oldRumble;
 	struct mRotationSource rotation;
 	struct mScriptValue* rotationCbTable;
@@ -203,12 +206,6 @@ struct mScriptCoreAdapter {
 	struct mScriptValue* luminanceCb;
 	struct GBALuminanceSource* oldLuminance;
 #endif
-};
-
-struct mScriptConsole {
-	struct mLogger* logger;
-	mScriptContextBufferFactory textBufferFactory;
-	void* textBufferContext;
 };
 
 #define CALCULATE_SEGMENT_INFO \
@@ -335,15 +332,15 @@ mSCRIPT_DEFINE_STRUCT(mScriptMemoryDomain)
 mSCRIPT_DEFINE_END;
 
 static struct mScriptValue* _mScriptCoreGetGameTitle(const struct mCore* core) {
-	char title[32] = {0};
-	core->getGameTitle(core, title);
-	return mScriptStringCreateFromASCII(title);
+	struct mGameInfo info;
+	core->getGameInfo(core, &info);
+	return mScriptStringCreateFromASCII(info.title);
 }
 
 static struct mScriptValue* _mScriptCoreGetGameCode(const struct mCore* core) {
-	char code[16] = {0};
-	core->getGameCode(core, code);
-	return mScriptStringCreateFromASCII(code);
+	struct mGameInfo info;
+	core->getGameInfo(core, &info);
+	return mScriptStringCreateFromASCII(info.code);
 }
 
 static struct mScriptValue* _mScriptCoreChecksum(const struct mCore* core, int t) {
@@ -417,6 +414,7 @@ static struct mScriptValue* _mScriptCoreSaveState(struct mCore* core, int32_t fl
 	return value;
 }
 
+#ifdef ENABLE_VFS
 static int _mScriptCoreSaveStateFile(struct mCore* core, const char* path, int flags) {
 	struct VFile* vf = VFileOpen(path, O_WRONLY | O_TRUNC | O_CREAT);
 	if (!vf) {
@@ -425,13 +423,6 @@ static int _mScriptCoreSaveStateFile(struct mCore* core, const char* path, int f
 	bool ok = mCoreSaveStateNamed(core, vf, flags);
 	vf->close(vf);
 	return ok;
-}
-
-static int32_t _mScriptCoreLoadState(struct mCore* core, struct mScriptString* buffer, int32_t flags) {
-	struct VFile* vf = VFileFromConstMemory(buffer->buffer, buffer->size);
-	int ret = mCoreLoadStateNamed(core, vf, flags);
-	vf->close(vf);
-	return ret;
 }
 
 static int _mScriptCoreLoadStateFile(struct mCore* core, const char* path, int flags) {
@@ -455,6 +446,14 @@ static void _mScriptCoreTakeScreenshot(struct mCore* core, const char* filename)
 	} else {
 		mCoreTakeScreenshot(core);
 	}
+}
+#endif
+
+static int32_t _mScriptCoreLoadState(struct mCore* core, struct mScriptString* buffer, int32_t flags) {
+	struct VFile* vf = VFileFromConstMemory(buffer->buffer, buffer->size);
+	int ret = mCoreLoadStateNamed(core, vf, flags);
+	vf->close(vf);
+	return ret;
 }
 
 static struct mScriptValue* _mScriptCoreTakeScreenshotToImage(struct mCore* core) {
@@ -480,10 +479,12 @@ static struct mScriptValue* _mScriptCoreTakeScreenshotToImage(struct mCore* core
 	return result;
 }
 
+#ifdef ENABLE_VFS
 // Loading functions
 mSCRIPT_DECLARE_STRUCT_METHOD(mCore, BOOL, loadFile, mCoreLoadFile, 1, CHARP, path);
 mSCRIPT_DECLARE_STRUCT_METHOD(mCore, BOOL, autoloadSave, mCoreAutoloadSave, 0);
 mSCRIPT_DECLARE_STRUCT_METHOD(mCore, BOOL, loadSaveFile, mCoreLoadSaveFile, 2, CHARP, path, BOOL, temporary);
+#endif
 
 // Info functions
 mSCRIPT_DECLARE_STRUCT_CD_METHOD(mCore, S32, platform, 0);
@@ -519,31 +520,35 @@ mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mCore, busWrite16, 2, U32, address, U16, va
 mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mCore, busWrite32, 2, U32, address, U32, value);
 
 // Register functions
-mSCRIPT_DECLARE_STRUCT_METHOD(mCore, WSTR, readRegister, _mScriptCoreReadRegister, 1, CHARP, regName);
+mSCRIPT_DECLARE_STRUCT_METHOD(mCore, WRAPPER, readRegister, _mScriptCoreReadRegister, 1, CHARP, regName);
 mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mCore, writeRegister, _mScriptCoreWriteRegister, 2, CHARP, regName, S32, value);
 
 // Savestate functions
-mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, saveStateSlot, mCoreSaveState, 2, S32, slot, S32, flags);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, WSTR, saveStateBuffer, _mScriptCoreSaveState, 1, S32, flags);
+mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, loadStateBuffer, _mScriptCoreLoadState, 2, STR, buffer, S32, flags);
+#ifdef ENABLE_VFS
+mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, saveStateSlot, mCoreSaveState, 2, S32, slot, S32, flags);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, saveStateFile, _mScriptCoreSaveStateFile, 2, CHARP, path, S32, flags);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, loadStateSlot, mCoreLoadState, 2, S32, slot, S32, flags);
-mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, loadStateBuffer, _mScriptCoreLoadState, 2, STR, buffer, S32, flags);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mCore, BOOL, loadStateFile, _mScriptCoreLoadStateFile, 2, CHARP, path, S32, flags);
 
 // Miscellaneous functions
 mSCRIPT_DECLARE_STRUCT_VOID_METHOD_WITH_DEFAULTS(mCore, screenshot, _mScriptCoreTakeScreenshot, 1, CHARP, filename);
+#endif
 mSCRIPT_DECLARE_STRUCT_METHOD(mCore, W(mImage), screenshotToImage, _mScriptCoreTakeScreenshotToImage, 0);
 
 mSCRIPT_DEFINE_STRUCT(mCore)
 	mSCRIPT_DEFINE_CLASS_DOCSTRING(
 		"An instance of an emulator core."
 	)
+#ifdef ENABLE_VFS
 	mSCRIPT_DEFINE_DOCSTRING("Load a ROM file into the current state of this core")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadFile)
 	mSCRIPT_DEFINE_DOCSTRING("Load the save data associated with the currently loaded ROM file")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, autoloadSave)
 	mSCRIPT_DEFINE_DOCSTRING("Load save data from the given path. If the `temporary` flag is set, the given save data will not be written back to disk")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadSaveFile)
+#endif
 
 	mSCRIPT_DEFINE_DOCSTRING("Get which platform is being emulated. See C.PLATFORM for possible values")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, platform)
@@ -605,21 +610,23 @@ mSCRIPT_DEFINE_STRUCT(mCore)
 	mSCRIPT_DEFINE_DOCSTRING("Write the value of the register with the given name")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, writeRegister)
 
-	mSCRIPT_DEFINE_DOCSTRING("Save state to the slot number. See C.SAVESTATE for possible values for `flags`")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, saveStateSlot)
 	mSCRIPT_DEFINE_DOCSTRING("Save state and return as a buffer. See C.SAVESTATE for possible values for `flags`")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, saveStateBuffer)
+	mSCRIPT_DEFINE_DOCSTRING("Load state from a buffer. See C.SAVESTATE for possible values for `flags`")
+	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadStateBuffer)
+#ifdef ENABLE_VFS
+	mSCRIPT_DEFINE_DOCSTRING("Save state to the slot number. See C.SAVESTATE for possible values for `flags`")
+	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, saveStateSlot)
 	mSCRIPT_DEFINE_DOCSTRING("Save state to the given path. See C.SAVESTATE for possible values for `flags`")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, saveStateFile)
 	mSCRIPT_DEFINE_DOCSTRING("Load state from the slot number. See C.SAVESTATE for possible values for `flags`")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadStateSlot)
-	mSCRIPT_DEFINE_DOCSTRING("Load state from a buffer. See C.SAVESTATE for possible values for `flags`")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadStateBuffer)
 	mSCRIPT_DEFINE_DOCSTRING("Load state from the given path. See C.SAVESTATE for possible values for `flags`")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, loadStateFile)
 
 	mSCRIPT_DEFINE_DOCSTRING("Save a screenshot to a file")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, screenshot)
+#endif
 	mSCRIPT_DEFINE_DOCSTRING("Get a screenshot in an struct::mImage")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mCore, screenshotToImage)
 mSCRIPT_DEFINE_END;
@@ -931,6 +938,10 @@ static bool _mScriptCoreAdapterClearBreakpoint(struct mScriptCoreAdapter* adapte
 	}
 	return true;
 }
+
+uint64_t _mScriptCoreAdapterCurrentCycle(struct mScriptCoreAdapter* adapter) {
+	return mTimingGlobalTime(adapter->core->timing);
+}
 #endif
 
 static void _mScriptCoreAdapterDeinit(struct mScriptCoreAdapter* adapter) {
@@ -1078,6 +1089,7 @@ mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mScriptCoreAdapter, write16, _mScriptCoreAdap
 mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mScriptCoreAdapter, write32, _mScriptCoreAdapterWrite32, 2, U32, address, U32, value);
 
 #ifdef ENABLE_DEBUGGERS
+mSCRIPT_DECLARE_STRUCT_METHOD(mScriptCoreAdapter, U64, currentCycle, _mScriptCoreAdapterCurrentCycle, 0);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mScriptCoreAdapter, S64, setBreakpoint, _mScriptCoreAdapterSetBreakpoint, 3, WRAPPER, callback, U32, address, S32, segment);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mScriptCoreAdapter, S64, setWatchpoint, _mScriptCoreAdapterSetWatchpoint, 4, WRAPPER, callback, U32, address, S32, type, S32, segment);
 mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mScriptCoreAdapter, S64, setRangeWatchpoint, _mScriptCoreAdapterSetRangeWatchpoint, 5, WRAPPER, callback, U32, minAddress, U32, maxAddress, S32, type, S32, segment);
@@ -1143,6 +1155,8 @@ mSCRIPT_DEFINE_STRUCT(mScriptCoreAdapter)
 	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptCoreAdapter, write16)
 	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptCoreAdapter, write32)
 #ifdef ENABLE_DEBUGGERS
+	mSCRIPT_DEFINE_DOCSTRING("Get the current execution cycle")
+	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptCoreAdapter, currentCycle)
 	mSCRIPT_DEFINE_DOCSTRING("Set a breakpoint at a given address")
 	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptCoreAdapter, setBreakpoint)
 	mSCRIPT_DEFINE_DOCSTRING("Clear a breakpoint or watchpoint for a given id returned by a previous call")
@@ -1159,16 +1173,22 @@ mSCRIPT_DEFINE_STRUCT(mScriptCoreAdapter)
 	mSCRIPT_DEFINE_STRUCT_CAST_TO_MEMBER(mScriptCoreAdapter, CS(mCore), _core)
 mSCRIPT_DEFINE_END;
 
-static void _setRumble(struct mRumble* rumble, int enable) {
+static void _setRumble(struct mRumble* rumble, bool enable, uint32_t timeSince) {
 	struct mScriptCoreAdapter* adapter = containerof(rumble, struct mScriptCoreAdapter, rumble);
 
 	if (adapter->oldRumble) {
-		adapter->oldRumble->setRumble(adapter->oldRumble, enable);
+		adapter->oldRumble->setRumble(adapter->oldRumble, enable, timeSince);
 	}
+
+	adapter->rumbleIntegrator.d.setRumble(&adapter->rumbleIntegrator.d, enable, timeSince);
+}
+
+static void _setRumbleFloat(struct mRumbleIntegrator* integrator, float level) {
+	struct mScriptCoreAdapter* adapter = containerof(integrator, struct mScriptCoreAdapter, rumbleIntegrator);
 
 	struct mScriptList args;
 	mScriptListInit(&args, 1);
-	*mScriptListAppend(&args) = mSCRIPT_MAKE_BOOL(!!enable);
+	*mScriptListAppend(&args) = mSCRIPT_MAKE_F32(level);
 	mScriptContextTriggerCallback(adapter->context, "rumble", &args);
 	mScriptListDeinit(&args);
 }
@@ -1185,11 +1205,11 @@ static bool _callRotationCb(struct mScriptCoreAdapter* adapter, const char* cbNa
 	struct mScriptValue* context = mScriptTableLookup(adapter->rotationCbTable, &mSCRIPT_MAKE_CHARP("context"));
 	mScriptFrameInit(&frame);
 	if (context) {
-		mScriptValueWrap(context, mScriptListAppend(&frame.arguments));
+		mScriptValueWrap(context, mScriptListAppend(&frame.stack));
 	}
 	bool ok = mScriptContextInvoke(adapter->context, cb, &frame);
-	if (ok && out && mScriptListSize(&frame.returnValues) == 1) {
-		if (!mScriptCast(mSCRIPT_TYPE_MS_F32, mScriptListGetPointer(&frame.returnValues, 0), out)) {
+	if (ok && out && mScriptListSize(&frame.stack) == 1) {
+		if (!mScriptCast(mSCRIPT_TYPE_MS_F32, mScriptListGetPointer(&frame.stack, 0), out)) {
 			ok = false;
 		}
 	}
@@ -1258,8 +1278,8 @@ static uint8_t _readLuminance(struct GBALuminanceSource* luminance) {
 		mScriptFrameInit(&frame);
 		bool ok = mScriptContextInvoke(adapter->context, adapter->luminanceCb, &frame);
 		struct mScriptValue out = {0};
-		if (ok && mScriptListSize(&frame.returnValues) == 1) {
-			if (!mScriptCast(mSCRIPT_TYPE_MS_U8, mScriptListGetPointer(&frame.returnValues, 0), &out)) {
+		if (ok && mScriptListSize(&frame.stack) == 1) {
+			if (!mScriptCast(mSCRIPT_TYPE_MS_U8, mScriptListGetPointer(&frame.stack, 0), &out)) {
 				ok = false;
 			}
 		}
@@ -1287,6 +1307,8 @@ void mScriptContextAttachCore(struct mScriptContext* context, struct mCore* core
 	adapter->memory.type = mSCRIPT_TYPE_MS_TABLE;
 	adapter->memory.type->alloc(&adapter->memory);
 
+	mRumbleIntegratorInit(&adapter->rumbleIntegrator);
+	adapter->rumbleIntegrator.setRumble = _setRumbleFloat;
 	adapter->rumble.setRumble = _setRumble;
 	adapter->rotation.sample = _rotationSample;
 	adapter->rotation.readTiltX = _rotationReadTiltX;
@@ -1341,131 +1363,4 @@ void mScriptContextDetachCore(struct mScriptContext* context) {
 #endif
 
 	mScriptContextRemoveGlobal(context, "emu");
-}
-
-static struct mScriptTextBuffer* _mScriptConsoleCreateBuffer(struct mScriptConsole* lib, const char* name) {
-	struct mScriptTextBuffer* buffer = lib->textBufferFactory(lib->textBufferContext);
-	buffer->init(buffer, name);
-	return buffer;
-}
-
-static void mScriptConsoleLog(struct mScriptConsole* console, const char* msg) {
-	if (console->logger) {
-		mLogExplicit(console->logger, _mLOG_CAT_SCRIPT, mLOG_INFO, "%s", msg);
-	} else {
-		mLog(_mLOG_CAT_SCRIPT, mLOG_INFO, "%s", msg);
-	}
-}
-
-static void mScriptConsoleWarn(struct mScriptConsole* console, const char* msg) {
-	if (console->logger) {
-		mLogExplicit(console->logger, _mLOG_CAT_SCRIPT, mLOG_WARN, "%s", msg);
-	} else {
-		mLog(_mLOG_CAT_SCRIPT, mLOG_WARN, "%s", msg);
-	}
-}
-
-static void mScriptConsoleError(struct mScriptConsole* console, const char* msg) {
-	if (console->logger) {
-		mLogExplicit(console->logger, _mLOG_CAT_SCRIPT, mLOG_ERROR, "%s", msg);
-	} else {
-		mLog(_mLOG_CAT_SCRIPT, mLOG_ERROR, "%s", msg);
-	}
-}
-
-mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mScriptConsole, log, mScriptConsoleLog, 1, CHARP, msg);
-mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mScriptConsole, warn, mScriptConsoleWarn, 1, CHARP, msg);
-mSCRIPT_DECLARE_STRUCT_VOID_METHOD(mScriptConsole, error, mScriptConsoleError, 1, CHARP, msg);
-mSCRIPT_DECLARE_STRUCT_METHOD_WITH_DEFAULTS(mScriptConsole, S(mScriptTextBuffer), createBuffer, _mScriptConsoleCreateBuffer, 1, CHARP, name);
-
-mSCRIPT_DEFINE_STRUCT(mScriptConsole)
-	mSCRIPT_DEFINE_CLASS_DOCSTRING(
-		"A global singleton object `console` that can be used for presenting textual information to the user via a console."
-	)
-	mSCRIPT_DEFINE_DOCSTRING("Print a log to the console")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptConsole, log)
-	mSCRIPT_DEFINE_DOCSTRING("Print a warning to the console")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptConsole, warn)
-	mSCRIPT_DEFINE_DOCSTRING("Print an error to the console")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptConsole, error)
-	mSCRIPT_DEFINE_DOCSTRING("Create a text buffer that can be used to display custom information")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptConsole, createBuffer)
-mSCRIPT_DEFINE_END;
-
-mSCRIPT_DEFINE_STRUCT_BINDING_DEFAULTS(mScriptConsole, createBuffer)
-	mSCRIPT_CHARP(NULL)
-mSCRIPT_DEFINE_DEFAULTS_END;
-
-static struct mScriptConsole* _ensureConsole(struct mScriptContext* context) {
-	struct mScriptValue* value = mScriptContextGetGlobal(context, "console");
-	if (value) {
-		return value->value.opaque;
-	}
-	struct mScriptConsole* console = calloc(1, sizeof(*console));
-	value = mScriptValueAlloc(mSCRIPT_TYPE_MS_S(mScriptConsole));
-	value->value.opaque = console;
-	value->flags = mSCRIPT_VALUE_FLAG_FREE_BUFFER;
-	mScriptContextSetGlobal(context, "console", value);
-	mScriptContextSetDocstring(context, "console", "Singleton instance of struct::mScriptConsole");
-	return console;
-}
-
-void mScriptContextAttachLogger(struct mScriptContext* context, struct mLogger* logger) {
-	struct mScriptConsole* console = _ensureConsole(context);
-	console->logger = logger;
-}
-
-void mScriptContextDetachLogger(struct mScriptContext* context) {
-	struct mScriptValue* value = mScriptContextGetGlobal(context, "console");
-	if (!value) {
-		return;
-	}
-	struct mScriptConsole* console = value->value.opaque;
-	console->logger = mLogGetContext();
-}
-
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, deinit, 0);
-mSCRIPT_DECLARE_STRUCT_CD_METHOD(mScriptTextBuffer, U32, getX, 0);
-mSCRIPT_DECLARE_STRUCT_CD_METHOD(mScriptTextBuffer, U32, getY, 0);
-mSCRIPT_DECLARE_STRUCT_CD_METHOD(mScriptTextBuffer, U32, cols, 0);
-mSCRIPT_DECLARE_STRUCT_CD_METHOD(mScriptTextBuffer, U32, rows, 0);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, print, 1, CHARP, text);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, clear, 0);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, setSize, 2, U32, cols, U32, rows);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, moveCursor, 2, U32, x, U32, y);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, advance, 1, S32, adv);
-mSCRIPT_DECLARE_STRUCT_VOID_D_METHOD(mScriptTextBuffer, setName, 1, CHARP, name);
-
-mSCRIPT_DEFINE_STRUCT(mScriptTextBuffer)
-	mSCRIPT_DEFINE_CLASS_DOCSTRING(
-		"An object that can be used to present texual data to the user. It is displayed monospaced, "
-		"and text can be edited after sending by moving the cursor or clearing the buffer."
-	)
-	mSCRIPT_DEFINE_STRUCT_DEINIT_NAMED(mScriptTextBuffer, deinit)
-	mSCRIPT_DEFINE_DOCSTRING("Get the current x position of the cursor")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, getX)
-	mSCRIPT_DEFINE_DOCSTRING("Get the current y position of the cursor")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, getY)
-	mSCRIPT_DEFINE_DOCSTRING("Get number of columns in the buffer")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, cols)
-	mSCRIPT_DEFINE_DOCSTRING("Get number of rows in the buffer")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, rows)
-	mSCRIPT_DEFINE_DOCSTRING("Print a string to the buffer")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, print)
-	mSCRIPT_DEFINE_DOCSTRING("Clear the buffer")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, clear)
-	mSCRIPT_DEFINE_DOCSTRING("Set the number of rows and columns")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, setSize)
-	mSCRIPT_DEFINE_DOCSTRING("Set the position of the cursor")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, moveCursor)
-	mSCRIPT_DEFINE_DOCSTRING("Advance the cursor a number of columns")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, advance)
-	mSCRIPT_DEFINE_DOCSTRING("Set the user-visible name of this buffer")
-	mSCRIPT_DEFINE_STRUCT_METHOD(mScriptTextBuffer, setName)
-mSCRIPT_DEFINE_END;
-
-void mScriptContextSetTextBufferFactory(struct mScriptContext* context, mScriptContextBufferFactory factory, void* cbContext) {
-	struct mScriptConsole* console = _ensureConsole(context);
-	console->textBufferFactory = factory;
-	console->textBufferContext = cbContext;
 }

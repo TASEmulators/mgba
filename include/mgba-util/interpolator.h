@@ -8,14 +8,20 @@
 
 #include <mgba-util/common.h>
 
-struct mSampleBuffer {
-	int16_t* data;
-	size_t samples;
-	int channels;
+CXX_GUARD_START
+
+enum mInterpolatorType {
+	mINTERPOLATOR_SINC,
+	mINTERPOLATOR_COSINE,
+};
+
+struct mInterpolationData {
+	int16_t (*at)(int index, const void* context);
+	void* context;
 };
 
 struct mInterpolator {
-	int16_t (*interpolate)(const struct mInterpolator* interp, const struct mSampleBuffer* data, double time, double sampleStep);
+	int16_t (*interpolate)(const struct mInterpolator* interp, const struct mInterpolationData* data, double time, double sampleStep);
 };
 
 struct mInterpolatorSinc {
@@ -27,7 +33,19 @@ struct mInterpolatorSinc {
 	double* windowLut;
 };
 
+struct mInterpolatorCosine {
+	struct mInterpolator d;
+
+	unsigned resolution;
+	double* lut;
+};
+
 void mInterpolatorSincInit(struct mInterpolatorSinc* interp, unsigned resolution, unsigned width);
 void mInterpolatorSincDeinit(struct mInterpolatorSinc* interp);
+
+void mInterpolatorCosineInit(struct mInterpolatorCosine* interp, unsigned resolution);
+void mInterpolatorCosineDeinit(struct mInterpolatorCosine* interp);
+
+CXX_GUARD_END
 
 #endif

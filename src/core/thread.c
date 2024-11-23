@@ -5,7 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/core/thread.h>
 
-#include <mgba/core/blip_buf.h>
 #include <mgba/core/core.h>
 #ifdef ENABLE_SCRIPTING
 #include <mgba/script/context.h>
@@ -368,7 +367,7 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 				if (impl->sync.audioWait) {
 					MutexUnlock(&impl->stateMutex);
 					mCoreSyncLockAudio(&impl->sync);
-					mCoreSyncProduceAudio(&impl->sync, core->getAudioChannel(core, 0), core->getAudioBufferSize(core));
+					mCoreSyncProduceAudio(&impl->sync, core->getAudioBuffer(core));
 					MutexLock(&impl->stateMutex);
 				}
 			}
@@ -460,11 +459,11 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 	}
 	logger->filter = NULL;
 
-	return 0;
+	THREAD_EXIT(0);
 }
 
 bool mCoreThreadStart(struct mCoreThread* threadContext) {
-	threadContext->impl = calloc(sizeof(*threadContext->impl), 1);
+	threadContext->impl = calloc(1, sizeof(*threadContext->impl));
 	threadContext->impl->state = mTHREAD_INITIALIZED;
 	threadContext->impl->requested = 0;
 	threadContext->logger.p = threadContext;
@@ -498,6 +497,7 @@ bool mCoreThreadStart(struct mCoreThread* threadContext) {
 	threadContext->impl->sync.audioWait = threadContext->core->opts.audioSync;
 	threadContext->impl->sync.videoFrameWait = threadContext->core->opts.videoSync;
 	threadContext->impl->sync.fpsTarget = threadContext->core->opts.fpsTarget;
+	threadContext->impl->sync.audioHighWater = 512;
 
 	MutexLock(&threadContext->impl->stateMutex);
 	ThreadCreate(&threadContext->impl->thread, _mCoreThreadRun, threadContext);
@@ -656,7 +656,7 @@ void mCoreThreadContinue(struct mCoreThread* threadContext) {
 		if (threadContext->impl->requested) {
 			threadContext->impl->state = mTHREAD_REQUEST;
 		} else {
-			threadContext->impl->state = mTHREAD_RUNNING;			
+			threadContext->impl->state = mTHREAD_RUNNING;
 		}
 		ConditionWake(&threadContext->impl->stateOnThreadCond);
 	}

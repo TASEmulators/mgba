@@ -61,6 +61,18 @@
 #cmakedefine ENABLE_SCRIPTING
 #endif
 
+#ifndef ENABLE_VFS
+#cmakedefine ENABLE_VFS
+#endif
+
+#ifndef ENABLE_VFS_FD
+#cmakedefine ENABLE_VFS_FD
+#endif
+
+#ifndef ENABLE_VFS_FILE
+#cmakedefine ENABLE_VFS_FILE
+#endif
+
 // USE flags
 
 #ifndef USE_DISCORD_RPC

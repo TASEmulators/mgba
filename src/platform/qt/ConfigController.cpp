@@ -154,11 +154,12 @@ ConfigController::ConfigController(QObject* parent)
 	mSubParserGraphicsInit(&m_subparsers[0], &m_graphicsOpts);
 
 	m_subparsers[1].usage = "Frontend options:\n"
-	    "  --ecard FILE  Scan an e-Reader card in the first loaded game\n"
-	    "                Can be passed multiple times for multiple cards\n"
-	    "  --mb FILE     Boot a multiboot image with FILE inserted into the ROM slot"
+	      "  --ecard FILE   Scan an e-Reader card in the first loaded game\n"
+	      "                 Can be passed multiple times for multiple cards\n"
+	      "  --mb FILE      Boot a multiboot image with FILE inserted into the ROM slot"
 #ifdef ENABLE_SCRIPTING
-	    "\n  --script FILE Script file to load on start"
+	    "\n  --script FILE  Script file to load on start\n"
+	      "                 Can be passed multiple times\n"
 #endif
 	    ;
 
@@ -318,7 +319,11 @@ void ConfigController::setOption(const char* key, const char* value) {
 }
 
 void ConfigController::setOption(const char* key, const QVariant& value) {
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
 	if (value.type() == QVariant::Bool) {
+#else
+	if (value.typeId() == QMetaType::Type::Bool) {
+#endif
 		setOption(key, value.toBool());
 		return;
 	}

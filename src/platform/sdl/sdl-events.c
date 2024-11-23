@@ -22,15 +22,14 @@
 #endif
 
 #define GYRO_STEPS 100
-#define RUMBLE_PWM 16
-#define RUMBLE_STEPS 2
+#define RUMBLE_THRESHOLD 1.f / 128.f
 
 mLOG_DEFINE_CATEGORY(SDL_EVENTS, "SDL Events", "platform.sdl.events");
 
 DEFINE_VECTOR(SDL_JoystickList, struct SDL_JoystickCombo);
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-static void _mSDLSetRumble(struct mRumble* rumble, int enable);
+static void _mSDLSetRumble(struct mRumbleIntegrator* rumble, float level);
 #endif
 static int32_t _mSDLReadTiltX(struct mRotationSource* rumble);
 static int32_t _mSDLReadTiltY(struct mRotationSource* rumble);
@@ -143,18 +142,6 @@ void mSDLEventsLoadConfig(struct mSDLEvents* context, const struct Configuration
 }
 
 void mSDLInitBindingsGBA(struct mInputMap* inputMap) {
-#ifdef BUILD_PANDORA
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_PAGEDOWN, GBA_KEY_A);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_END, GBA_KEY_B);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_RSHIFT, GBA_KEY_L);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_RCTRL, GBA_KEY_R);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_LALT, GBA_KEY_START);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_LCTRL, GBA_KEY_SELECT);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_UP, GBA_KEY_UP);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_DOWN, GBA_KEY_DOWN);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_LEFT, GBA_KEY_LEFT);
-	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_RIGHT, GBA_KEY_RIGHT);
-#else
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_x, GBA_KEY_A);
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_z, GBA_KEY_B);
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_a, GBA_KEY_L);
@@ -165,7 +152,6 @@ void mSDLInitBindingsGBA(struct mInputMap* inputMap) {
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_DOWN, GBA_KEY_DOWN);
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_LEFT, GBA_KEY_LEFT);
 	mInputBindKey(inputMap, SDL_BINDING_KEY, SDLK_RIGHT, GBA_KEY_RIGHT);
-#endif
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
 	mInputBindKey(inputMap, SDL_BINDING_CONTROLLER, SDL_CONTROLLER_BUTTON_A, GBA_KEY_A);
@@ -201,9 +187,8 @@ bool mSDLAttachPlayer(struct mSDLEvents* events, struct mSDLPlayer* player) {
 	}
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
+	mRumbleIntegratorInit(&player->rumble.d);
 	player->rumble.d.setRumble = _mSDLSetRumble;
-	CircleBufferInit(&player->rumble.history, RUMBLE_PWM);
-	player->rumble.level = 0;
 	player->rumble.activeLevel = 0;
 	player->rumble.p = player;
 #endif
@@ -219,7 +204,7 @@ bool mSDLAttachPlayer(struct mSDLEvents* events, struct mSDLPlayer* player) {
 	player->rotation.gyroY = 1;
 	player->rotation.gyroZ = -1;
 	player->rotation.zDelta = 0;
-	CircleBufferInit(&player->rotation.zHistory, sizeof(float) * GYRO_STEPS);
+	mCircleBufferInit(&player->rotation.zHistory, sizeof(float) * GYRO_STEPS);
 	player->rotation.p = player;
 
 	player->playerId = events->playersAttached;
@@ -293,10 +278,7 @@ void mSDLDetachPlayer(struct mSDLEvents* events, struct mSDLPlayer* player) {
 		}
 	}
 	--events->playersAttached;
-	CircleBufferDeinit(&player->rotation.zHistory);
-#if SDL_VERSION_ATLEAST(2, 0, 0)
-	CircleBufferDeinit(&player->rumble.history);
-#endif
+	mCircleBufferDeinit(&player->rotation.zHistory);
 }
 
 void mSDLPlayerLoadConfig(struct mSDLPlayer* context, const struct Configuration* config) {
@@ -522,11 +504,6 @@ static void _mSDLHandleKeypress(struct mCoreThread* context, struct mSDLPlayer* 
 			context->frameCallback = _pauseAfterFrame;
 			mCoreThreadUnpause(context);
 			return;
-#ifdef BUILD_PANDORA
-		case SDLK_ESCAPE:
-			mCoreThreadEnd(context);
-			return;
-#endif
 		default:
 			if ((event->keysym.mod & GUI_MOD) && (event->keysym.mod & GUI_MOD) == event->keysym.mod) {
 				switch (event->keysym.sym) {
@@ -719,7 +696,7 @@ void mSDLHandleEvent(struct mCoreThread* context, struct mSDLPlayer* sdlContext,
 }
 
 #if SDL_VERSION_ATLEAST(2, 0, 0)
-static void _mSDLSetRumble(struct mRumble* rumble, int enable) {
+static void _mSDLSetRumble(struct mRumbleIntegrator* rumble, float level) {
 	struct mSDLRumble* sdlRumble = (struct mSDLRumble*) rumble;
 	if (!sdlRumble->p->joystick) {
 		return;
@@ -737,36 +714,23 @@ static void _mSDLSetRumble(struct mRumble* rumble, int enable) {
 	}
 #endif
 
-	int8_t originalLevel = sdlRumble->level;
-	sdlRumble->level += enable;
-	if (CircleBufferSize(&sdlRumble->history) == RUMBLE_PWM) {
-		int8_t oldLevel;
-		CircleBufferRead8(&sdlRumble->history, &oldLevel);
-		sdlRumble->level -= oldLevel;
-	}
-	CircleBufferWrite8(&sdlRumble->history, enable);
-	if (sdlRumble->level == originalLevel) {
-		return;
-	}
-	float activeLevel = ceil(RUMBLE_STEPS * sdlRumble->level / (float) RUMBLE_PWM) / RUMBLE_STEPS;
-	if (fabsf(sdlRumble->activeLevel - activeLevel) < 0.75 / RUMBLE_STEPS) {
-		return;
-	}
-	sdlRumble->activeLevel = activeLevel;
 #if SDL_VERSION_ATLEAST(2, 0, 9)
-	if (sdlRumble->p->joystick->controller) {
-		SDL_GameControllerRumble(sdlRumble->p->joystick->controller, activeLevel * 0xFFFF, activeLevel * 0xFFFF, 500);
-	} else {
-		SDL_JoystickRumble(sdlRumble->p->joystick->joystick, activeLevel * 0xFFFF, activeLevel * 0xFFFF, 500);
+	if (sdlRumble->activeLevel > RUMBLE_THRESHOLD || level > RUMBLE_THRESHOLD) {
+		if (sdlRumble->p->joystick->controller) {
+			SDL_GameControllerRumble(sdlRumble->p->joystick->controller, level * 0xFFFF, level * 0xFFFF, 67);
+		} else {
+			SDL_JoystickRumble(sdlRumble->p->joystick->joystick, level * 0xFFFF, level * 0xFFFF, 67);
+		}
 	}
 #else
-	if (sdlRumble->activeLevel > 0.5 / RUMBLE_STEPS) {
+	if (sdlRumble->activeLevel > RUMBLE_THRESHOLD || level > RUMBLE_THRESHOLD) {
 		SDL_HapticRumbleStop(sdlRumble->p->joystick->haptic);
-		SDL_HapticRumblePlay(sdlRumble->p->joystick->haptic, activeLevel, 500);
+		SDL_HapticRumblePlay(sdlRumble->p->joystick->haptic, level, 500);
 	} else {
 		SDL_HapticRumbleStop(sdlRumble->p->joystick->haptic);
 	}
 #endif
+	sdlRumble->activeLevel = level;
 }
 #endif
 
@@ -851,10 +815,10 @@ static void _mSDLRotationSample(struct mRotationSource* source) {
 	rotation->oldY = y;
 
 	float oldZ = 0;
-	if (CircleBufferSize(&rotation->zHistory) == GYRO_STEPS * sizeof(float)) {
-		CircleBufferRead32(&rotation->zHistory, (int32_t*) &oldZ);
+	if (mCircleBufferSize(&rotation->zHistory) == GYRO_STEPS * sizeof(float)) {
+		mCircleBufferRead32(&rotation->zHistory, (int32_t*) &oldZ);
 	}
-	CircleBufferWrite32(&rotation->zHistory, theta.i);
+	mCircleBufferWrite32(&rotation->zHistory, theta.i);
 	rotation->zDelta += theta.f - oldZ;
 }
 

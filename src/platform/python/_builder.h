@@ -22,8 +22,7 @@
 #define CXX_GUARD_END
 
 #define PYCPARSE
-#define va_list void*
-
+typedef ... va_list;
 typedef int... time_t;
 typedef int... off_t;
 typedef ...* png_structp;
@@ -36,7 +35,6 @@ void free(void*);
 
 #include <mgba/flags.h>
 
-#include <mgba/core/blip_buf.h>
 #include <mgba/core/cache-set.h>
 #include <mgba/core/core.h>
 #include <mgba/core/map-cache.h>
@@ -47,7 +45,6 @@ void free(void*);
 #define PYEXPORT extern "Python+C"
 #include "platform/python/core.h"
 #include "platform/python/log.h"
-#include "platform/python/sio.h"
 #include "platform/python/vfs-py.h"
 #undef PYEXPORT
 

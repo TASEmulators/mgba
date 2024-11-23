@@ -97,7 +97,7 @@ CoreController::CoreController(mCore* core, QObject* parent)
 		controller->m_frameCounter = -1;
 
 		if (!controller->m_hwaccel) {
-			context->core->setVideoBuffer(context->core, reinterpret_cast<color_t*>(controller->m_activeBuffer.data()), controller->screenDimensions().width());
+			context->core->setVideoBuffer(context->core, reinterpret_cast<mColor*>(controller->m_activeBuffer.data()), controller->screenDimensions().width());
 		}
 
 		QString message(tr("Reset r%1-%2 %3").arg(gitRevision).arg(QLatin1String(gitCommitShort)).arg(controller->m_crc32, 8, 16, QLatin1Char('0')));
@@ -236,12 +236,12 @@ void CoreController::setPath(const QString& path, const QString& base) {
 	m_baseDirectory = base;
 }
 
-const color_t* CoreController::drawContext() {
+const mColor* CoreController::drawContext() {
 	if (m_hwaccel) {
 		return nullptr;
 	}
 	QMutexLocker locker(&m_bufferMutex);
-	return reinterpret_cast<const color_t*>(m_completeBuffer.constData());
+	return reinterpret_cast<const mColor*>(m_completeBuffer.constData());
 }
 
 QImage CoreController::getPixels() {
@@ -307,14 +307,14 @@ void CoreController::loadConfig(ConfigController* config) {
 	m_preload = config->getOption("preload").toInt();
 
 	QSize sizeBefore = screenDimensions();
-	m_activeBuffer.resize(256 * 224 * sizeof(color_t));
-	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<color_t*>(m_activeBuffer.data()), sizeBefore.width());
+	m_activeBuffer.resize(256 * 224 * sizeof(mColor));
+	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<mColor*>(m_activeBuffer.data()), sizeBefore.width());
 
 	mCoreLoadForeignConfig(m_threadContext.core, config->config());
 
 	QSize sizeAfter = screenDimensions();
-	m_activeBuffer.resize(sizeAfter.width() * sizeAfter.height() * sizeof(color_t));
-	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<color_t*>(m_activeBuffer.data()), sizeAfter.width());
+	m_activeBuffer.resize(sizeAfter.width() * sizeAfter.height() * sizeof(mColor));
+	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<mColor*>(m_activeBuffer.data()), sizeAfter.width());
 
 	if (hasStarted()) {
 		updateFastForward();
@@ -423,8 +423,8 @@ bool CoreController::attachDolphin(const Address& address) {
 		return false;
 	}
 	if (GBASIODolphinConnect(&m_dolphin, &address, 0, 0)) {
-		GBA* gba = static_cast<GBA*>(m_threadContext.core->board);
-		GBASIOSetDriver(&gba->sio, &m_dolphin.d, SIO_JOYBUS);
+		clearMultiplayerController();
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_dolphin.d);
 		return true;
 	}
 	return false;
@@ -432,8 +432,8 @@ bool CoreController::attachDolphin(const Address& address) {
 
 void CoreController::detachDolphin() {
 	if (platform() == mPLATFORM_GBA) {
-		GBA* gba = static_cast<GBA*>(m_threadContext.core->board);
-		GBASIOSetDriver(&gba->sio, nullptr, SIO_JOYBUS);
+		// TODO: Reattach to multiplayer controller
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
 	}
 	GBASIODolphinDestroy(&m_dolphin);
 }
@@ -461,11 +461,11 @@ void CoreController::setLogger(LogController* logger) {
 
 void CoreController::start() {
 	QSize size(screenDimensions());
-	m_activeBuffer.resize(size.width() * size.height() * sizeof(color_t));
+	m_activeBuffer.resize(size.width() * size.height() * sizeof(mColor));
 	m_activeBuffer.fill(0xFF);
 	m_completeBuffer = m_activeBuffer;
 
-	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<color_t*>(m_activeBuffer.data()), size.width());
+	m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<mColor*>(m_activeBuffer.data()), size.width());
 
 	if (!m_patched) {
 		mCoreAutoloadPatch(m_threadContext.core);
@@ -736,7 +736,7 @@ void CoreController::saveState(const QString& path, int flags) {
 			vf->read(vf, controller->m_backupSaveState.data(), controller->m_backupSaveState.size());
 			vf->close(vf);
 		}
-		vf = VFileDevice::open(controller->m_statePath, O_WRONLY | O_CREAT | O_TRUNC);
+		vf = VFileDevice::open(controller->m_statePath, O_RDWR | O_CREAT | O_TRUNC);
 		if (!vf) {
 			return;
 		}
@@ -1094,7 +1094,7 @@ void CoreController::attachBattleChipGate() {
 	Interrupter interrupter(this);
 	clearMultiplayerController();
 	GBASIOBattlechipGateCreate(&m_battlechip);
-	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_BATTLECHIP_GATE, &m_battlechip);
+	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_battlechip);
 }
 
 void CoreController::detachBattleChipGate() {
@@ -1102,7 +1102,7 @@ void CoreController::detachBattleChipGate() {
 		return;
 	}
 	Interrupter interrupter(this);
-	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_BATTLECHIP_GATE, nullptr);
+	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, nullptr);
 }
 
 void CoreController::setBattleChipId(uint16_t id) {
@@ -1194,7 +1194,7 @@ void CoreController::setFramebufferHandle(int fb) {
 	if (hasStarted()) {
 		m_threadContext.core->reloadConfigOption(m_threadContext.core, "hwaccelVideo", NULL);
 		if (!m_hwaccel) {
-			m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<color_t*>(m_activeBuffer.data()), screenDimensions().width());
+			m_threadContext.core->setVideoBuffer(m_threadContext.core, reinterpret_cast<mColor*>(m_activeBuffer.data()), screenDimensions().width());
 		}
 	}
 }
@@ -1318,9 +1318,9 @@ void CoreController::updateROMInfo() {
 	mCore* core = m_threadContext.core;
 	core->checksum(core, &m_crc32, mCHECKSUM_CRC32);
 
-	char gameTitle[17] = { '\0' };
-	core->getGameTitle(core, gameTitle);
-	m_internalTitle = QLatin1String(gameTitle);
+	mGameInfo info;
+	core->getGameInfo(core, &info);
+	m_internalTitle = QLatin1String(info.title);
 
 #ifdef USE_SQLITE3
 	if (db && m_crc32 && NoIntroDBLookupGameByCRC(db, m_crc32, &game)) {
