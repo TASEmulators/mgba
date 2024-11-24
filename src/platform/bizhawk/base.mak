@@ -2,6 +2,7 @@ CCFLAGS = \
 	-O3 -fomit-frame-pointer -fexpensive-optimizations -flto \
 	-I../../../../include -I../../.. -std=gnu11 \
 	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch \
+	-Wno-ignored-optimization-argument -Wno-unknown-warning-option \
 	-DMINIMAL_CORE=2 -DDISABLE_THREADING -DM_CORE_GBA \
 	-DCOLOR_16_BIT -DMGBA_STANDALONE -DENABLE_DEBUGGERS \
 	$(PLAT_FLAGS)

@@ -63,7 +63,7 @@ typedef struct
 	struct VFile* sramvf;
 	struct mKeyCallback keysource;
 	struct mRotationSource rotsource;
-	struct mRumble rumble;
+	struct mRumbleIntegrator rumble;
 	struct mRTCSource rtcsource;
 	struct GBALuminanceSource lumasource;
 	struct mDebugger debugger;
@@ -81,7 +81,7 @@ typedef struct
 	bool skipbios;
 	uint32_t palette[0x10000];
 	void (*input_callback)(void);
-	void (*rumble_callback)(int enable);
+	void (*rumble_callback)(int value);
 	void (*trace_callback)(const char *buffer);
 	void (*exec_callback)(uint32_t pc);
 	void (*mem_callback)(uint32_t addr, enum mWatchpointType type, uint32_t oldValue, uint32_t newValue);
@@ -120,10 +120,10 @@ static void RotationCB(struct mRotationSource* rotationSource)
 	ctx->input_callback();
 	ctx->lagged = false;
 }
-static void SetRumble(struct mRumble* rumble, bool enable, uint32_t sinceLast)
+static void SetRumble(struct mRumbleIntegrator* rumble, float value)
 {
 	bizctx* ctx = container_of(rumble, bizctx, rumble);
-	ctx->rumble_callback(enable);
+	ctx->rumble_callback(value * (double)INT_MAX);
 }
 static void AudioRateChangedCB(struct mAVStream* stream, unsigned rate)
 {
@@ -215,7 +215,7 @@ EXP void BizSetInputCallback(bizctx* ctx, void(*callback)(void))
 	ctx->input_callback = callback;
 }
 
-EXP void BizSetRumbleCallback(bizctx* ctx, void(*callback)(int enable))
+EXP void BizSetRumbleCallback(bizctx* ctx, void(*callback)(int value))
 {
 	ctx->rumble_callback = callback;
 }
@@ -314,10 +314,12 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 
 	ctx->core->setVideoBuffer(ctx->core, ctx->vbuff, GBA_VIDEO_HORIZONTAL_PIXELS);
 	ctx->core->setAudioBufferSize(ctx->core, maxSamples);
+
 	mAudioBufferInit(&ctx->abuf, maxSamples, 2);
 	mAudioResamplerInit(&ctx->resampler, mINTERPOLATOR_SINC);
 	mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), ctx->core->audioSampleRate(ctx->core), true);
 	mAudioResamplerSetDestination(&ctx->resampler, &ctx->abuf, 44100);
+
 	ctx->stream.audioRateChanged = AudioRateChangedCB;
 	ctx->core->setAVStream(ctx->core, &ctx->stream);
 
