@@ -505,6 +505,7 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	mDebuggerRunFrame(&ctx->debugger);
 
 	blit(vbuff, ctx->vbuff, ctx->palette);
+	mAudioResamplerProcess(&ctx->resampler);
 	*nsamp = mAudioBufferAvailable(&ctx->abuf);
 	if (*nsamp > maxSamples)
 		*nsamp = maxSamples;
