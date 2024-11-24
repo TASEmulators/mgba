@@ -2,7 +2,6 @@ CCFLAGS = \
 	-O3 -fomit-frame-pointer -fexpensive-optimizations -flto \
 	-I../../../../include -I../../.. -std=gnu11 \
 	-Wall -Wno-stringop-overflow -Wno-lto-type-mismatch \
-	-Wno-ignored-optimization-argument -Wno-unknown-warning-option \
 	-DMINIMAL_CORE=2 -DDISABLE_THREADING -DM_CORE_GBA \
 	-DCOLOR_16_BIT -DMGBA_STANDALONE -DENABLE_DEBUGGERS \
 	$(PLAT_FLAGS)
@@ -72,15 +71,15 @@ SRCS = \
 	$(ROOT_DIR)/gba/renderers/software-obj.c \
 	$(ROOT_DIR)/gba/renderers/video-software.c \
 	$(ROOT_DIR)/gba/sio/gbp.c \
-	$(ROOT_DIR)/gba/sio/joybus.c \
 	$(ROOT_DIR)/gba/sio/lockstep.c \
 	$(ROOT_DIR)/debugger/debugger.c \
 	$(ROOT_DIR)/debugger/stack-trace.c \
 	$(ROOT_DIR)/debugger/cli-debugger.c \
 	$(ROOT_DIR)/debugger/symbols.c \
 	$(ROOT_DIR)/debugger/parser.c \
-	$(ROOT_DIR)/third-party/blip_buf/blip_buf.c \
 	$(ROOT_DIR)/third-party/inih/ini.c \
+	$(ROOT_DIR)/util/audio-buffer.c \
+	$(ROOT_DIR)/util/audio-resampler.c \
 	$(ROOT_DIR)/util/circle-buffer.c \
 	$(ROOT_DIR)/util/configuration.c \
 	$(ROOT_DIR)/util/crc32.c \
@@ -90,6 +89,8 @@ SRCS = \
 	$(ROOT_DIR)/util/gui.c \
 	$(ROOT_DIR)/util/hash.c \
 	$(ROOT_DIR)/util/image/png-io.c \
+	$(ROOT_DIR)/util/interpolator.c \
+	$(ROOT_DIR)/util/md5.c \
 	$(ROOT_DIR)/util/patch-fast.c \
 	$(ROOT_DIR)/util/patch-ips.c \
 	$(ROOT_DIR)/util/patch-ups.c \

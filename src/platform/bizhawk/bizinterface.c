@@ -4,7 +4,6 @@
 #include "mgba/core/log.h"
 #include "mgba/core/timing.h"
 #include "mgba/core/serialize.h"
-#include "mgba/core/blip_buf.h"
 #include "mgba/gba/core.h"
 #include "mgba/gba/interface.h"
 #include "mgba/internal/gba/gba.h"
@@ -12,12 +11,13 @@
 #include "mgba/internal/gba/overrides.h"
 #include "mgba/internal/arm/isa-inlines.h"
 #include "mgba/debugger/debugger.h"
+#include <mgba-util/audio-resampler.h>
 #include "mgba-util/common.h"
 #include "mgba-util/vfs.h"
 
 // interop sanity checks
 static_assert(sizeof(bool) == 1, "Wrong bool size!");
-static_assert(sizeof(color_t) == 2, "Wrong color_t size!");
+static_assert(sizeof(mColor) == 2, "Wrong mColor size!");
 static_assert(sizeof(enum mWatchpointType) == 4, "Wrong mWatchpointType size!");
 static_assert(sizeof(enum GBASavedataType) == 4, "Wrong GBASavedataType size!");
 static_assert(sizeof(enum GBAHardwareDevice) == 4, "Wrong GBAHardwareDevice size!");
@@ -51,7 +51,9 @@ typedef struct
 	struct mCore* core;
 	struct mLogger logger;
 	struct GBA* gba; // anything that uses this will be deprecated eventually
-	color_t vbuff[GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS];
+	mColor vbuff[GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS];
+	struct mAudioBuffer abuf;
+	struct mAVStream stream;
 	void* rom;
 	struct VFile* romvf;
 	uint8_t bios[0x4000];
@@ -65,6 +67,7 @@ typedef struct
 	struct GBALuminanceSource lumasource;
 	struct mDebugger debugger;
 	struct mDebuggerModule module;
+	struct mAudioResampler resampler;
 	bool attached;
 	struct GBACartridgeOverride override;
 	int16_t tiltx;
@@ -116,10 +119,16 @@ static void RotationCB(struct mRotationSource* rotationSource)
 	ctx->input_callback();
 	ctx->lagged = false;
 }
-static void SetRumble(struct mRumble* rumble, int enable)
+static void SetRumble(struct mRumble* rumble, bool enable, uint32_t sinceLast)
 {
 	bizctx* ctx = container_of(rumble, bizctx, rumble);
 	ctx->rumble_callback(enable);
+}
+static void AudioRateChangedCB(struct mAVStream* stream, unsigned rate)
+{
+    bizctx* ctx = container_of(stream, bizctx, stream);
+    mAudioResamplerProcess(&ctx->resampler);
+    mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), rate, true);
 }
 static void LightCB(struct GBALuminanceSource* luminanceSource)
 {
@@ -167,6 +176,7 @@ EXP void BizDestroy(bizctx* ctx)
 	}
 
 	ctx->core->deinit(ctx->core);
+	mAudioResamplerDeinit(&ctx->resampler);
 	free(ctx->rom);
 	free(ctx);
 }
@@ -303,9 +313,12 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 
 	ctx->core->setVideoBuffer(ctx->core, ctx->vbuff, GBA_VIDEO_HORIZONTAL_PIXELS);
 	ctx->core->setAudioBufferSize(ctx->core, 1024);
-
-	blip_set_rates(ctx->core->getAudioChannel(ctx->core, 0), ctx->core->frequency(ctx->core), 44100);
-	blip_set_rates(ctx->core->getAudioChannel(ctx->core, 1), ctx->core->frequency(ctx->core), 44100);
+	mAudioBufferInit(&ctx->abuf, 1024, 2);
+	mAudioResamplerInit(&ctx->resampler, mINTERPOLATOR_SINC);
+	mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), ctx->core->audioSampleRate(ctx->core), true);
+	mAudioResamplerSetDestination(&ctx->resampler, &ctx->abuf, 44100);
+	ctx->stream.audioRateChanged = AudioRateChangedCB;
+	ctx->core->setAVStream(ctx->core, &ctx->stream);
 
 	if (!ctx->core->loadROM(ctx->core, ctx->romvf))
 	{
@@ -464,7 +477,7 @@ EXP void BizReset(bizctx* ctx)
 	resetinternal(ctx);
 }
 
-static void blit(uint32_t* dst, const color_t* src, const uint32_t* palette)
+static void blit(uint32_t* dst, const mColor* src, const uint32_t* palette)
 {
 	uint32_t* dst_end = dst + GBA_VIDEO_HORIZONTAL_PIXELS * GBA_VIDEO_VERTICAL_PIXELS;
 
@@ -491,11 +504,10 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	mDebuggerRunFrame(&ctx->debugger);
 
 	blit(vbuff, ctx->vbuff, ctx->palette);
-	*nsamp = blip_samples_avail(ctx->core->getAudioChannel(ctx->core, 0));
+	*nsamp = mAudioBufferAvailable(&ctx->abuf);
 	if (*nsamp > 1024)
 		*nsamp = 1024;
-	blip_read_samples(ctx->core->getAudioChannel(ctx->core, 0), sbuff, 1024, true);
-	blip_read_samples(ctx->core->getAudioChannel(ctx->core, 1), sbuff + 1, 1024, true);
+	mAudioBufferRead(&ctx->abuf, sbuff, 1024);
 	return ctx->lagged;
 }
 
