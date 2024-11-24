@@ -344,6 +344,8 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 	ctx->gba->idleOptimization = IDLE_LOOP_IGNORE; // Don't do "idle skipping"
 	ctx->gba->keyCallback = &ctx->keysource; // Callback for key reading
 
+	mRumbleIntegratorInit(&ctx->rumble);
+
 	ctx->keysource.readKeys = GetKeys;
 	ctx->rotsource.sample = RotationCB;
 	ctx->rotsource.readTiltX = GetX;
@@ -354,9 +356,9 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 	ctx->lumasource.readLuminance = GetLight;
 	ctx->rtcsource.sample = TimeCB;
 	ctx->rtcsource.unixTime = GetTime;
-	
+
 	ctx->core->setPeripheral(ctx->core, mPERIPH_ROTATION, &ctx->rotsource);
-	ctx->core->setPeripheral(ctx->core, mPERIPH_RUMBLE, &ctx->rumble);
+	ctx->core->setPeripheral(ctx->core, mPERIPH_RUMBLE, &ctx->rumble.d);
 	ctx->core->setPeripheral(ctx->core, mPERIPH_GBA_LUMINANCE, &ctx->lumasource);
 
 	if (bios)
