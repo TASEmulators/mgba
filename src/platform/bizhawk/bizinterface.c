@@ -27,6 +27,7 @@ static_assert(sizeof(void*) == 8, "Wrong pointer size!");
 const char* const binaryName = "mgba";
 const char* const projectName = "mGBA BizHawk";
 const char* const projectVersion = "(unknown)";
+const int maxSamples = 1024;
 
 #ifdef _WIN32
 #define EXP __declspec(dllexport)
@@ -312,8 +313,8 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 	ctx->gba = ctx->core->board;
 
 	ctx->core->setVideoBuffer(ctx->core, ctx->vbuff, GBA_VIDEO_HORIZONTAL_PIXELS);
-	ctx->core->setAudioBufferSize(ctx->core, 1024);
-	mAudioBufferInit(&ctx->abuf, 1024, 2);
+	ctx->core->setAudioBufferSize(ctx->core, maxSamples);
+	mAudioBufferInit(&ctx->abuf, maxSamples, 2);
 	mAudioResamplerInit(&ctx->resampler, mINTERPOLATOR_SINC);
 	mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), ctx->core->audioSampleRate(ctx->core), true);
 	mAudioResamplerSetDestination(&ctx->resampler, &ctx->abuf, 44100);
@@ -505,9 +506,9 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 
 	blit(vbuff, ctx->vbuff, ctx->palette);
 	*nsamp = mAudioBufferAvailable(&ctx->abuf);
-	if (*nsamp > 1024)
-		*nsamp = 1024;
-	mAudioBufferRead(&ctx->abuf, sbuff, 1024);
+	if (*nsamp > maxSamples)
+		*nsamp = maxSamples;
+	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
 	return ctx->lagged;
 }
 
