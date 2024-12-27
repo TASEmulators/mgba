@@ -357,17 +357,27 @@ SettingsView::SettingsView(ConfigController* controller, InputController* inputC
 	});
 
 	QLocale englishLocale("en");
-	m_ui.languages->addItem(englishLocale.nativeLanguageName(), englishLocale);
+	m_ui.languages->addItem("English", englishLocale);
 	QDir ts(":/translations/");
 	for (auto& name : ts.entryList()) {
 		if (!name.endsWith(".qm") || !name.startsWith(binaryName)) {
 			continue;
 		}
 		QLocale locale(name.remove(QString("%0-").arg(binaryName)).remove(".qm"));
-		if (locale.language() == QLocale::English) {
+		if (locale.language() == QLocale::English || locale.language() == QLocale::C) {
 			continue;
 		}
-		m_ui.languages->addItem(locale.nativeLanguageName(), locale);
+		QString endonym = locale.nativeLanguageName();
+		// Manualy handle some cases that Qt can't seem to do properly
+		if (locale.language() == QLocale::Spanish) {
+			// Qt insists this is called español de España, regardless of if we set the country
+			endonym = u8"Español";
+		} else if (locale.language() == QLocale::Portuguese && locale.country() == QLocale::Brazil) {
+			// Qt insists that Brazilian Portuguese is just called Português
+			endonym = u8"Português brasileiro";
+		}
+		endonym[0] = endonym[0].toUpper();
+		m_ui.languages->addItem(endonym, locale);
 		if (locale.bcp47Name() == QLocale().bcp47Name()) {
 			m_ui.languages->setCurrentIndex(m_ui.languages->count() - 1);
 		}
@@ -423,8 +433,12 @@ void SettingsView::setShaderSelector(ShaderSelector* shaderSelector) {
 	}
 	if (!m_shader) {
 		m_ui.stackedWidget->removeWidget(m_dummyShader);
+	} else {
+		QObject::disconnect(m_shader, nullptr, this, nullptr);
 	}
 	m_shader = shaderSelector;
+	QObject::connect(this, &SettingsView::saveSettingsRequested, m_shader, &ShaderSelector::saveSettings);
+	QObject::connect(m_ui.buttonBox, &QDialogButtonBox::rejected, m_shader, &ShaderSelector::revert);
 	if (shaderSelector) {
 		addPage(tr("Shaders"), m_shader, Page::SHADERS);
 	} else {
@@ -682,6 +696,8 @@ void SettingsView::updateConfig() {
 	}
 	saveSetting("gb.colors", gbColors);
 #endif
+
+	emit saveSettingsRequested();
 
 	m_controller->write();
 
