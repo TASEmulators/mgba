@@ -60,6 +60,7 @@ SRCS = \
 	$(ROOT_DIR)/gba/cart/ereader.c \
 	$(ROOT_DIR)/gba/cart/gpio.c \
 	$(ROOT_DIR)/gba/cart/matrix.c \
+	$(ROOT_DIR)/gba/cart/unlicensed.c \
 	$(ROOT_DIR)/gba/cart/vfame.c \
 	$(ROOT_DIR)/gba/cheats/codebreaker.c \
 	$(ROOT_DIR)/gba/cheats/gameshark.c \
