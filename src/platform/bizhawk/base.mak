@@ -98,6 +98,7 @@ SRCS = \
 	$(ROOT_DIR)/util/patch-ups.c \
 	$(ROOT_DIR)/util/patch.c \
 	$(ROOT_DIR)/util/ring-fifo.c \
+	$(ROOT_DIR)/util/sha1.c \
 	$(ROOT_DIR)/util/string.c \
 	$(ROOT_DIR)/util/table.c \
 	$(ROOT_DIR)/util/text-codec.c \
