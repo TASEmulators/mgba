@@ -310,7 +310,7 @@ bool MultiplayerController::attachGame(CoreController* controller) {
 			break;
 		}
 		if (!player.saveId) {
-			LOG(QT, ERROR) << "Couldn't find available save ID";
+			LOG(QT, ERROR) << tr("Couldn't find available save ID");
 			player.saveId = 1;
 		}
 	} else if (saveId) {

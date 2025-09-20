@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "AudioDevice.h"
 
+#include "GBAApp.h"
 #include "LogController.h"
 
 #include <mgba/core/core.h>

@@ -25,10 +25,6 @@
 
 struct NoIntroDB;
 
-#include <mgba/core/log.h>
-
-mLOG_DECLARE_CATEGORY(QT);
-
 namespace QGBA {
 
 class ConfigController;
@@ -81,6 +77,8 @@ public:
 
 	ApplicationUpdater* updater() { return &m_updater; }
 	QString invokeOnExit() { return m_invokeOnExit; }
+
+	void initMultiplayer();
 
 public slots:
 	void restartForUpdate();

@@ -24,6 +24,7 @@
 #include <mgba-util/md5.h>
 #include <mgba-util/memory.h>
 #include <mgba-util/patch.h>
+#include <mgba-util/sha1.h>
 #include <mgba-util/vfs.h>
 
 static const struct mCoreChannelInfo _GBVideoLayers[] = {
@@ -150,7 +151,7 @@ static bool _GBCoreInit(struct mCore* core) {
 	gbcore->keys = 0;
 	gb->keySource = &gbcore->keys;
 
-#ifdef ENABLE_VFS
+#if defined(ENABLE_VFS) && defined(ENABLE_DIRECTORIES)
 	mDirectorySetInit(&core->dirs);
 #endif
 
@@ -162,7 +163,7 @@ static void _GBCoreDeinit(struct mCore* core) {
 	GBDestroy(core->board);
 	mappedMemoryFree(core->cpu, sizeof(struct SM83Core));
 	mappedMemoryFree(core->board, sizeof(struct GB));
-#ifdef ENABLE_VFS
+#if defined(ENABLE_VFS) && defined(ENABLE_DIRECTORIES)
 	mDirectorySetDeinit(&core->dirs);
 #endif
 #ifdef ENABLE_DEBUGGERS
@@ -539,6 +540,15 @@ static void _GBCoreChecksum(const struct mCore* core, void* data, enum mCoreChec
 			md5Buffer("", 0, data);
 		}
 		break;
+	case mCHECKSUM_SHA1:
+		if (gb->romVf) {
+			sha1File(gb->romVf, data);
+		} else if (gb->memory.rom && gb->isPristine) {
+			sha1Buffer(gb->memory.rom, gb->pristineRomSize, data);
+		} else {
+			sha1Buffer("", 0, data);
+		}
+		break;
 	}
 	return;
 }
@@ -651,6 +661,7 @@ static void _GBCoreReset(struct mCore* core) {
 				bios = NULL;
 			}
 		}
+#if defined(ENABLE_VFS) && defined(ENABLE_DIRECTORIES)
 		if (!found) {
 			char path[PATH_MAX];
 			mCoreConfigDirectory(path, PATH_MAX);
@@ -679,6 +690,7 @@ static void _GBCoreReset(struct mCore* core) {
 				bios = NULL;
 			}
 		}
+#endif
 		if (found && bios) {
 			GBLoadBIOS(gb, bios);
 		}
@@ -1128,7 +1140,7 @@ static void _GBCoreLoadSymbols(struct mCore* core, struct VFile* vf) {
 	if (!core->symbolTable) {
 		core->symbolTable = mDebuggerSymbolTableCreate();
 	}
-#ifdef ENABLE_VFS
+#if defined(ENABLE_VFS) && defined(ENABLE_DIRECTORIES)
 	if (!vf && core->dirs.base) {
 		vf = mDirectorySetOpenSuffix(&core->dirs, core->dirs.base, ".sym", O_RDONLY);
 	}
@@ -1167,19 +1179,32 @@ static struct mCheatDevice* _GBCoreCheatDevice(struct mCore* core) {
 
 static size_t _GBCoreSavedataClone(struct mCore* core, void** sram) {
 	struct GB* gb = core->board;
-	struct VFile* vf = gb->sramVf;
-	if (vf) {
-		*sram = malloc(vf->size(vf));
-		vf->seek(vf, 0, SEEK_SET);
-		return vf->read(vf, *sram, vf->size(vf));
+	size_t sramSize = gb->sramSize;
+	size_t vfSize = 0;
+	size_t size = sramSize;
+	uint8_t* view = NULL;
+
+	if (gb->sramVf) {
+		vfSize = gb->sramVf->size(gb->sramVf);
+		if (vfSize > size) {
+			size = vfSize;
+		}
 	}
-	if (gb->sramSize) {
-		*sram = malloc(gb->sramSize);
-		memcpy(*sram, gb->memory.sram, gb->sramSize);
-		return gb->sramSize;
+	if (!size) {
+		*sram = NULL;
+		return 0;
 	}
-	*sram = NULL;
-	return 0;
+
+	view = malloc(size);
+	if (sramSize) {
+		memcpy(view, gb->memory.sram, gb->sramSize);
+	}
+	if (vfSize > sramSize) {
+		gb->sramVf->seek(gb->sramVf, sramSize, SEEK_SET);
+		gb->sramVf->read(gb->sramVf, &view[sramSize], vfSize - sramSize);
+	}
+	*sram = view;
+	return size;
 }
 
 static bool _GBCoreSavedataRestore(struct mCore* core, const void* sram, size_t size, bool writeback) {

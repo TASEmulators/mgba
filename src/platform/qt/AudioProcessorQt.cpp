@@ -78,7 +78,7 @@ bool AudioProcessorQt::start() {
 
 		QAudioDevice device(QMediaDevices::defaultAudioOutput());
 		m_audioOutput = std::make_unique<QAudioSink>(device, format);
-		LOG(QT, INFO) << "Audio outputting to " << device.description();
+		LOG(QT, INFO) << tr("Audio outputting to %1").arg(device.description());
 		connect(m_audioOutput.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
 			if (state != QAudio::IdleState) {
 				return;

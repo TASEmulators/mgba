@@ -58,6 +58,10 @@
 #endif
 #endif
 
+#ifdef USE_FREETYPE
+#include <freetype/freetype.h>
+#endif
+
 #ifdef USE_LIBZIP
 #include <zip.h>
 #endif
@@ -142,12 +146,17 @@ void ReportView::generateReport() {
 #endif
 	libavVers << QLatin1String(LIBSWSCALE_IDENT);
 #ifdef USE_LIBAV
-	swReport << QString("Libav versions: %1.%2").arg(libavVers.join(", "));
+	swReport << QString("Libav versions: %1").arg(libavVers.join(", "));
 #else
-	swReport << QString("FFmpeg versions: %1.%2").arg(libavVers.join(", "));
+	swReport << QString("FFmpeg versions: %1").arg(libavVers.join(", "));
 #endif
 #else
 	swReport << QString("FFmpeg not linked");
+#endif
+#ifdef USE_FREETYPE
+	swReport << QString("FreeType version: %1.%2.%3").arg(FREETYPE_MAJOR).arg(FREETYPE_MINOR).arg(FREETYPE_PATCH);
+#else
+	swReport << QString("FreeType not linked");
 #endif
 #ifdef USE_EDITLINE
 	swReport << QString("libedit version: %1.%2").arg(LIBEDIT_MAJOR).arg(LIBEDIT_MINOR);
@@ -494,6 +503,14 @@ void ReportView::addGamepadInfo(QStringList& report) {
 }
 
 void ReportView::addROMInfo(QStringList& report, CoreController* controller) {
+	QFileInfo saveInfo(controller->savePath());
+	if (saveInfo.exists()) {
+		report << QString("Save file: %1").arg(redact(saveInfo.filePath()));
+		report << QString("Save size: %1").arg(saveInfo.size());
+	} else {
+		report << QString("No save file");
+	}
+
 	report << QString("Currently paused: %1").arg(yesNo[controller->isPaused()]);
 
 	mCore* core = controller->thread()->core;
@@ -549,7 +566,7 @@ void ReportView::addBinary(const QString& filename, const QByteArray& binary) {
 }
 
 QString ReportView::redact(const QString& text) {
-	static QRegularExpression home(R"((?:\b|^)[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/]+|(?:/usr)?/home/[^/]+)",
+	static QRegularExpression home(R"((?:\b|^)[A-Z]:(?:/|\\\\?)(?:Users|Documents and Settings)(?:/|\\\\?)[^\\/]+|(?:/usr)?/home/[^/]+)",
 	                               QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
 	QString redacted = text;
 	redacted.replace(home, QString("[Home directory]"));

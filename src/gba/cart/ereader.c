@@ -650,7 +650,7 @@ void _eReaderWriteControl0(struct GBACartEReader* ereader, uint8_t value) {
 	}
 	ereader->registerControl0 = control;
 	if (!EReaderControl0IsScan(oldControl) && EReaderControl0IsScan(control)) {
-		if (ereader->scanX > 1000) {
+		if (ereader->scanX > 0) {
 			_eReaderScanCard(ereader);
 		}
 		ereader->scanX = 0;
@@ -668,7 +668,7 @@ void _eReaderWriteControl1(struct GBACartEReader* ereader, uint8_t value) {
 		++ereader->scanY;
 		if (ereader->scanY == (ereader->serial[0x15] | (ereader->serial[0x14] << 8))) {
 			ereader->scanY = 0;
-			if (ereader->scanX < 3400) {
+			if (ereader->scanX < 4050) {
 				ereader->scanX += 210;
 			}
 		}
@@ -998,14 +998,14 @@ struct EReaderScan* EReaderScanLoadImage8(const void* pixels, unsigned width, un
 }
 
 void EReaderScanDetectParams(struct EReaderScan* scan) {
-	size_t sum = 0;
+	double product = 0;
 	unsigned y;
 	for (y = 0; y < scan->height; ++y) {
 		const uint8_t* row = &scan->buffer[scan->width * y];
 		unsigned x;
 		for (x = 0; x < scan->width; ++x) {
 			uint8_t color = row[x];
-			sum += color;
+			product += log(color + 1);
 			if (color < scan->min) {
 				scan->min = color;
 			}
@@ -1014,8 +1014,8 @@ void EReaderScanDetectParams(struct EReaderScan* scan) {
 			}
 		}
 	}
-	scan->mean = sum / (scan->width * scan->height);
-	scan->anchorThreshold = 2 * (scan->mean - scan->min) / 5 + scan->min;
+	scan->mean = exp(product / (scan->width * scan->height));
+	scan->anchorThreshold = (scan->max - scan->mean) / 2 + scan->min;
 }
 
 void EReaderScanDetectAnchors(struct EReaderScan* scan) {
@@ -1107,6 +1107,10 @@ void EReaderScanFilterAnchors(struct EReaderScan* scan) {
 			areaMean += portion;
 		}
 	}
+	if (!EReaderAnchorListSize(&scan->anchors)) {
+		return;
+	}
+
 	areaMean /= EReaderAnchorListSize(&scan->anchors);
 	for (i = 0; i < EReaderAnchorListSize(&scan->anchors); ++i) {
 		struct EReaderAnchor* anchor = EReaderAnchorListGetPointer(&scan->anchors, i);
@@ -1117,6 +1121,9 @@ void EReaderScanFilterAnchors(struct EReaderScan* scan) {
 			EReaderAnchorListShift(&scan->anchors, i, 1);
 			--i;
 		}
+	}
+	if (!EReaderAnchorListSize(&scan->anchors)) {
+		return;
 	}
 
 	qsort(EReaderAnchorListGetPointer(&scan->anchors, 0), EReaderAnchorListSize(&scan->anchors), sizeof(struct EReaderAnchor), _compareAnchors);
@@ -1496,11 +1503,15 @@ bool EReaderScanCard(struct EReaderScan* scan) {
 	EReaderScanConnectAnchors(scan);
 	EReaderScanCreateBlocks(scan);
 	size_t blocks = EReaderBlockListSize(&scan->blocks);
+	if (!blocks) {
+		return false;
+	}
+
 	size_t i;
 	for (i = 0; i < blocks; ++i) {
 		EReaderScanDetectBlockThreshold(scan, i);
 		unsigned errors = 36 * 36;
-		while (!EReaderScanScanBlock(scan, i, true)) {
+		while (!EReaderScanScanBlock(scan, i, false)) {
 			if (errors < EReaderBlockListGetPointer(&scan->blocks, i)->errors) {
 				return false;
 			}

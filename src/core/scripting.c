@@ -350,6 +350,12 @@ static struct mScriptValue* _mScriptCoreChecksum(const struct mCore* core, int t
 	case mCHECKSUM_CRC32:
 		size = 4;
 		break;
+	case mCHECKSUM_MD5:
+		size = 16;
+		break;
+	case mCHECKSUM_SHA1:
+		size = 20;
+		break;
 	}
 	if (!size) {
 		return &mScriptValueNull;
@@ -769,7 +775,7 @@ static int64_t _addCallbackToBreakpoint(struct mScriptDebugger* debugger, struct
 	return cbid;
 }
 
-static void _runCallbacks(struct mScriptDebugger* debugger, struct mScriptBreakpoint* point) {
+static void _runCallbacks(struct mScriptDebugger* debugger, struct mScriptBreakpoint* point, struct mScriptValue* info) {
 	struct TableIterator iter;
 	if (!HashTableIteratorStart(&point->callbacks, &iter)) {
 		return;
@@ -778,6 +784,7 @@ static void _runCallbacks(struct mScriptDebugger* debugger, struct mScriptBreakp
 		struct mScriptValue* fn = HashTableIteratorGetValue(&point->callbacks, &iter);
 		struct mScriptFrame frame;
 		mScriptFrameInit(&frame);
+		mSCRIPT_PUSH(&frame.stack, WTABLE, info);
 		mScriptContextInvoke(debugger->p->context, fn, &frame);
 		mScriptFrameDeinit(&frame);
 	} while (HashTableIteratorNext(&point->callbacks, &iter));
@@ -826,7 +833,50 @@ static void _scriptDebuggerEntered(struct mDebuggerModule* debugger, enum mDebug
 		return;
 	}
 
-	_runCallbacks(scriptDebugger, point);
+	struct mScriptValue cbInfo = {
+		.refs = mSCRIPT_VALUE_UNREF,
+		.flags = 0,
+		.type = mSCRIPT_TYPE_MS_TABLE,
+	};
+	cbInfo.type->alloc(&cbInfo);
+
+	static struct mScriptValue keyAddress = mSCRIPT_CHARP("address");
+	static struct mScriptValue keyWidth = mSCRIPT_CHARP("width");
+	static struct mScriptValue keySegment = mSCRIPT_CHARP("segment");
+	static struct mScriptValue keyOldValue = mSCRIPT_CHARP("oldValue");
+	static struct mScriptValue keyNewValue = mSCRIPT_CHARP("newValue");
+	static struct mScriptValue keyAccessType = mSCRIPT_CHARP("accessType");
+
+	struct mScriptValue valAddress = mSCRIPT_MAKE_U32(info->address);
+	struct mScriptValue valWidth = mSCRIPT_MAKE_S32(info->width);
+	struct mScriptValue valSegment = mSCRIPT_MAKE_S32(info->segment);
+	struct mScriptValue valOldValue;
+	struct mScriptValue valNewValue;
+	struct mScriptValue valAccessType;
+
+	mScriptTableInsert(&cbInfo, &keyAddress, &valAddress);
+	if (info->width > 0) {
+		mScriptTableInsert(&cbInfo, &keyWidth, &valWidth);
+	}
+	if (info->segment >= 0) {
+		mScriptTableInsert(&cbInfo, &keySegment, &valSegment);
+	}
+
+	if (reason == DEBUGGER_ENTER_WATCHPOINT) {
+		valOldValue = mSCRIPT_MAKE_S32(info->type.wp.oldValue);
+		valNewValue = mSCRIPT_MAKE_S32(info->type.wp.newValue);
+		valAccessType = mSCRIPT_MAKE_S32(info->type.wp.accessType);
+
+		mScriptTableInsert(&cbInfo, &keyOldValue, &valOldValue);
+		if (info->type.wp.accessType != WATCHPOINT_READ) {
+			mScriptTableInsert(&cbInfo, &keyNewValue, &valNewValue);
+		}
+		mScriptTableInsert(&cbInfo, &keyAccessType, &valAccessType);
+	}
+
+	_runCallbacks(scriptDebugger, point, &cbInfo);
+
+	cbInfo.type->free(&cbInfo);
 	debugger->isPaused = false;
 }
 
@@ -939,7 +989,7 @@ static bool _mScriptCoreAdapterClearBreakpoint(struct mScriptCoreAdapter* adapte
 	return true;
 }
 
-uint64_t _mScriptCoreAdapterCurrentCycle(struct mScriptCoreAdapter* adapter) {
+static uint64_t _mScriptCoreAdapterCurrentCycle(struct mScriptCoreAdapter* adapter) {
 	return mTimingGlobalTime(adapter->core->timing);
 }
 #endif
@@ -948,6 +998,19 @@ static void _mScriptCoreAdapterDeinit(struct mScriptCoreAdapter* adapter) {
 	_clearMemoryMap(adapter->context, adapter, false);
 	adapter->memory.type->free(&adapter->memory);
 #ifdef ENABLE_DEBUGGERS
+	if (adapter->debugger.d.p) {
+		struct TableIterator iter;
+		if (HashTableIteratorStart(&adapter->debugger.breakpoints, &iter)) {
+			struct mDebuggerModule* module = &adapter->debugger.d;
+			do {
+				struct mScriptBreakpoint* point = HashTableIteratorGetValue(&adapter->debugger.breakpoints, &iter);
+				module->p->platform->clearBreakpoint(module->p->platform, point->id);
+			} while (HashTableIteratorNext(&adapter->debugger.breakpoints, &iter));
+		}
+		HashTableClear(&adapter->debugger.breakpoints);
+		HashTableClear(&adapter->debugger.cbidMap);
+		HashTableClear(&adapter->debugger.bpidMap);
+	}
 	if (adapter->core->debugger) {
 		mDebuggerDetachModule(adapter->core->debugger, &adapter->debugger.d);
 	}
@@ -1176,11 +1239,31 @@ mSCRIPT_DEFINE_END;
 static void _setRumble(struct mRumble* rumble, bool enable, uint32_t timeSince) {
 	struct mScriptCoreAdapter* adapter = containerof(rumble, struct mScriptCoreAdapter, rumble);
 
-	if (adapter->oldRumble) {
+	if (adapter->oldRumble && adapter->oldRumble->setRumble) {
 		adapter->oldRumble->setRumble(adapter->oldRumble, enable, timeSince);
 	}
 
 	adapter->rumbleIntegrator.d.setRumble(&adapter->rumbleIntegrator.d, enable, timeSince);
+}
+
+static void _rumbleIntegrate(struct mRumble* rumble, uint32_t period) {
+	struct mScriptCoreAdapter* adapter = containerof(rumble, struct mScriptCoreAdapter, rumble);
+
+	if (adapter->oldRumble && adapter->oldRumble->integrate) {
+		adapter->oldRumble->integrate(adapter->oldRumble, period);
+	}
+
+	adapter->rumbleIntegrator.d.integrate(&adapter->rumbleIntegrator.d, period);
+}
+
+static void _rumbleReset(struct mRumble* rumble, bool enable) {
+	struct mScriptCoreAdapter* adapter = containerof(rumble, struct mScriptCoreAdapter, rumble);
+
+	if (adapter->oldRumble && adapter->oldRumble->reset) {
+		adapter->oldRumble->reset(adapter->oldRumble, enable);
+	}
+
+	adapter->rumbleIntegrator.d.reset(&adapter->rumbleIntegrator.d, enable);
 }
 
 static void _setRumbleFloat(struct mRumbleIntegrator* integrator, float level) {
@@ -1296,6 +1379,24 @@ static uint8_t _readLuminance(struct GBALuminanceSource* luminance) {
 }
 #endif
 
+#define mCoreCallback(NAME) _mScriptCoreCallback ## NAME
+#define DEFINE_CALLBACK(NAME) \
+	void mCoreCallback(NAME) (void* context) { \
+		struct mScriptContext* scriptContext = context; \
+		if (!scriptContext) { \
+			return; \
+		} \
+		mScriptContextTriggerCallback(scriptContext, #NAME, NULL); \
+	}
+
+DEFINE_CALLBACK(frame)
+DEFINE_CALLBACK(crashed)
+DEFINE_CALLBACK(sleep)
+DEFINE_CALLBACK(stop)
+DEFINE_CALLBACK(keysRead)
+DEFINE_CALLBACK(savedataUpdated)
+DEFINE_CALLBACK(alarm)
+
 void mScriptContextAttachCore(struct mScriptContext* context, struct mCore* core) {
 	struct mScriptValue* coreValue = mScriptValueAlloc(mSCRIPT_TYPE_MS_S(mScriptCoreAdapter));
 	struct mScriptCoreAdapter* adapter = calloc(1, sizeof(*adapter));
@@ -1310,6 +1411,8 @@ void mScriptContextAttachCore(struct mScriptContext* context, struct mCore* core
 	mRumbleIntegratorInit(&adapter->rumbleIntegrator);
 	adapter->rumbleIntegrator.setRumble = _setRumbleFloat;
 	adapter->rumble.setRumble = _setRumble;
+	adapter->rumble.reset = _rumbleReset;
+	adapter->rumble.integrate = _rumbleIntegrate;
 	adapter->rotation.sample = _rotationSample;
 	adapter->rotation.readTiltX = _rotationReadTiltX;
 	adapter->rotation.readTiltY = _rotationReadTiltY;
@@ -1327,6 +1430,18 @@ void mScriptContextAttachCore(struct mScriptContext* context, struct mCore* core
 		core->setPeripheral(core, mPERIPH_GBA_LUMINANCE, &adapter->luminance);
 	}
 #endif
+
+	struct mCoreCallbacks callbacks = {
+		.videoFrameEnded = mCoreCallback(frame),
+		.coreCrashed = mCoreCallback(crashed),
+		.sleep = mCoreCallback(sleep),
+		.shutdown = mCoreCallback(stop),
+		.keysRead = mCoreCallback(keysRead),
+		.savedataUpdated = mCoreCallback(savedataUpdated),
+		.alarm = mCoreCallback(alarm),
+		.context = context
+	};
+	core->addCoreCallbacks(core, &callbacks);
 
 	_rebuildMemoryMap(context, adapter);
 

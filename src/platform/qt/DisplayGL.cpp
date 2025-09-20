@@ -699,7 +699,13 @@ void PainterGL::resizeContext() {
 	dequeueAll(false);
 
 	mRectangle dims = {0, 0, size.width(), size.height()};
+	if (!m_started) {
+		makeCurrent();
+	}
 	m_backend->setLayerDimensions(m_backend, VIDEO_LAYER_IMAGE, &dims);
+	if (!m_started) {
+		m_gl->doneCurrent();
+	}
 	recenterLayers();
 	m_dims = size;
 }
@@ -807,11 +813,11 @@ void PainterGL::start() {
 		mGLES2ShaderAttach(reinterpret_cast<mGLES2Context*>(m_backend), static_cast<mGLES2Shader*>(m_shader.passes), m_shader.nPasses);
 	}
 #endif
-	resizeContext();
 
 	m_buffer = nullptr;
 	m_active = true;
 	m_started = true;
+	resizeContext();
 	swapInterval(1);
 	emit started();
 }
@@ -848,6 +854,12 @@ void PainterGL::draw() {
 		swapInterval(wantSwap);
 	}
 	dequeue();
+	if (m_drawFrametimes) {
+		m_starttimes.append(m_delayTimer.elapsed());
+		if (m_starttimes.count() > MAX_FRAME_HISTORY) {
+			m_starttimes.erase(m_starttimes.begin(), m_starttimes.end() - MAX_FRAME_HISTORY);
+		}
+	}
 	bool forceRedraw = true;
 	if (!m_delayTimer.isValid()) {
 		m_delayTimer.start();
@@ -865,7 +877,13 @@ void PainterGL::draw() {
 	mCoreSyncWaitFrameEnd(sync);
 
 	if (forceRedraw) {
-		m_delayTimer.restart();
+		qint64 frametime = m_delayTimer.restart();
+		if (m_drawFrametimes) {
+			m_frametimes.append(frametime);
+			if (m_frametimes.count() > MAX_FRAME_HISTORY) {
+				m_frametimes.erase(m_frametimes.begin(), m_frametimes.end() - MAX_FRAME_HISTORY);
+			}
+		}
 		performDraw();
 		m_backend->swap(m_backend);
 	}
@@ -877,7 +895,13 @@ void PainterGL::forceDraw() {
 		if (m_delayTimer.elapsed() < 1000 / m_window->screen()->refreshRate()) {
 			return;
 		}
-		m_delayTimer.restart();
+		qint64 frametime = m_delayTimer.restart();
+		if (m_drawFrametimes) {
+			m_frametimes.append(frametime);
+			if (m_frametimes.count() > MAX_FRAME_HISTORY) {
+				m_frametimes.erase(m_frametimes.begin(), m_frametimes.end() - MAX_FRAME_HISTORY);
+			}
+		}
 	}
 	m_backend->swap(m_backend);
 }
@@ -935,6 +959,38 @@ void PainterGL::performDraw() {
 	if (m_showOSD && m_messagePainter && m_paintDev && !glContextHasBug(OpenGLBug::IG4ICD_CRASH)) {
 		m_painter.begin(m_paintDev.get());
 		m_messagePainter->paint(&m_painter);
+
+		if (m_drawFrametimes) {
+			m_painter.setPen(Qt::gray);
+			m_painter.drawLine(0, 13, MAX_FRAME_HISTORY, 13);
+			m_painter.drawLine(0, 58, MAX_FRAME_HISTORY, 58);
+
+			int i;
+			qint64 last;
+
+			i = 0;
+			last = -1;
+			m_painter.setPen(Qt::green);
+			for (qint64 time : m_frametimes) {
+				if (last >= 0) {
+					m_painter.drawLine(i, 45 - std::min(last * 2, 45LL), i + 1, 45 - std::min(time * 2, 45LL));
+					++i;
+				}
+				last = time;
+			}
+
+			i = 0;
+			last = -1;
+			m_painter.setPen(Qt::red);
+			for (qint64 time : m_starttimes) {
+				if (last >= 0) {
+					m_painter.drawLine(i, 90 - std::min(last * 2, 45LL), i + 1, 90 - std::min(time * 2, 45LL));
+					++i;
+				}
+				last = time;
+			}
+		}
+
 		m_painter.end();
 	}
 }
