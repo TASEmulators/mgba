@@ -69,6 +69,8 @@ typedef struct
 	struct mDebugger debugger;
 	struct mDebuggerModule module;
 	struct mAudioResampler resampler;
+	struct mTimingEvent subevent;
+	bool sub_event_passed;
 	bool attached;
 	struct GBACartridgeOverride override;
 	int16_t tiltx;
@@ -125,17 +127,24 @@ static void SetRumble(struct mRumbleIntegrator* rumble, float value)
 	bizctx* ctx = container_of(rumble, bizctx, rumble);
 	ctx->rumble_callback(value * (double)INT_MAX);
 }
-static void AudioRateChangedCB(struct mAVStream* stream, unsigned rate)
-{
-    bizctx* ctx = container_of(stream, bizctx, stream);
-    mAudioResamplerProcess(&ctx->resampler);
-    mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), rate, true);
-}
 static void LightCB(struct GBALuminanceSource* luminanceSource)
 {
 	bizctx* ctx = container_of(luminanceSource, bizctx, lumasource);
 	ctx->input_callback();
 	ctx->lagged = false;
+}
+static void AudioRateChangedCB(struct mAVStream* stream, unsigned rate)
+{
+	bizctx* ctx = container_of(stream, bizctx, stream);
+	mAudioResamplerProcess(&ctx->resampler);
+	mAudioResamplerSetSource(&ctx->resampler, ctx->core->getAudioBuffer(ctx->core), rate, true);
+}
+static void SubEventCB(struct mTiming* timing, void* context, uint32_t cycles_late)
+{
+	bizctx* ctx = (bizctx*)context;
+	ctx->sub_event_passed = true;
+	ctx->gba->earlyExit = true;
+	mTimingInterrupt(timing);
 }
 static void TimeCB(struct mRTCSource* rtcSource)
 {
@@ -466,6 +475,11 @@ EXP bizctx* BizCreate(const void* bios, const void* data, uint32_t length, const
 	mDebuggerAttach(&ctx->debugger, ctx->core);
 	ctx->attached = true;
 
+	ctx->subevent.context = ctx;
+	ctx->subevent.name = "Biz Sub Event";
+	ctx->subevent.callback = SubEventCB;
+	ctx->subevent.priority = 0x80;
+
 	resetinternal(ctx);
 
 	// proper init RTC, our buffer would have trashed it
@@ -514,6 +528,47 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	if (*nsamp > maxSamples)
 		*nsamp = maxSamples;
 	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
+	return ctx->lagged;
+}
+
+EXP bool BizSubAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp, int16_t* sbuff,
+	int64_t time, int16_t gyrox, int16_t gyroy, int16_t gyroz, uint8_t luma, uint32_t* cycles)
+{
+	ctx->core->setKeys(ctx->core, keys);
+	ctx->keys = keys;
+	ctx->light = luma;
+	ctx->time = time;
+	ctx->tiltx = gyrox;
+	ctx->tilty = gyroy;
+	ctx->tiltz = gyroz;
+	ctx->lagged = true;
+
+	ctx->module.needsCallback = ctx->trace_callback || ctx->exec_callback;
+	ctx->debugger.state = ctx->module.needsCallback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
+
+	ctx->sub_event_passed = false;
+	mTimingSchedule(ctx->core->timing, &ctx->subevent, *cycles);
+
+	int32_t start_cycle = mTimingCurrentTime(ctx->core->timing);
+	uint32_t start_frame = ctx->core->frameCounter(ctx->core);
+	while (!ctx->sub_event_passed)
+	{
+		mDebuggerRun(&ctx->debugger);
+		uint32_t current_frame = ctx->core->frameCounter(ctx->core);
+		if (start_frame != current_frame)
+		{
+			blit(vbuff, ctx->vbuff, ctx->palette);
+			start_frame = current_frame;
+		}
+	}
+
+	mAudioResamplerProcess(&ctx->resampler);
+	*nsamp = mAudioBufferAvailable(&ctx->abuf);
+	if (*nsamp > maxSamples)
+		*nsamp = maxSamples;
+	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
+
+	*cycles = (mTimingCurrentTime(ctx->core->timing) - start_cycle) - *cycles;
 	return ctx->lagged;
 }
 
