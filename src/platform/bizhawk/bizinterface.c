@@ -507,7 +507,7 @@ static void blit(uint32_t* dst, const mColor* src, const uint32_t* palette)
 }
 
 EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp, int16_t* sbuff,
-	int64_t time, int16_t gyrox, int16_t gyroy, int16_t gyroz, uint8_t luma)
+	int64_t time, int16_t gyrox, int16_t gyroy, int16_t gyroz, uint8_t luma, uint32_t* cycles)
 {
 	ctx->core->setKeys(ctx->core, keys);
 	ctx->keys = keys;
@@ -520,6 +520,8 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 
 	ctx->module.needsCallback = ctx->trace_callback || ctx->exec_callback;
 	ctx->debugger.state = ctx->module.needsCallback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
+
+	int32_t start_cycle = mTimingCurrentTime(ctx->core->timing);
 	mDebuggerRunFrame(&ctx->debugger);
 
 	blit(vbuff, ctx->vbuff, ctx->palette);
@@ -528,6 +530,8 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	if (*nsamp > maxSamples)
 		*nsamp = maxSamples;
 	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
+
+	*cycles = mTimingCurrentTime(ctx->core->timing) - start_cycle;
 	return ctx->lagged;
 }
 
@@ -568,7 +572,7 @@ EXP bool BizSubAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* ns
 		*nsamp = maxSamples;
 	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
 
-	*cycles = (mTimingCurrentTime(ctx->core->timing) - start_cycle) - *cycles;
+	*cycles = mTimingCurrentTime(ctx->core->timing) - start_cycle;
 	return ctx->lagged;
 }
 
@@ -692,11 +696,6 @@ EXP void BizSetRegister(bizctx* ctx, int32_t index, int32_t value)
 	{
 		memcpy(&ctx->gba->cpu->spsr, &value, sizeof(int32_t));
 	}
-}
-
-EXP uint64_t BizGetGlobalTime(bizctx* ctx)
-{
-	return mTimingGlobalTime(ctx->debugger.core->timing);
 }
 
 EXP void BizWriteBus(bizctx* ctx, uint32_t addr, uint8_t val)
