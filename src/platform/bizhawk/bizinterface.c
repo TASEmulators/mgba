@@ -79,6 +79,8 @@ typedef struct
 	int64_t time;
 	uint8_t light;
 	uint16_t keys;
+	int32_t start_cycle;
+	bool running_frame;
 	bool lagged;
 	bool skipbios;
 	uint32_t palette[0x10000];
@@ -521,7 +523,9 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 	ctx->module.needsCallback = ctx->trace_callback || ctx->exec_callback;
 	ctx->debugger.state = ctx->module.needsCallback ? DEBUGGER_CALLBACK : DEBUGGER_RUNNING;
 
-	int32_t start_cycle = mTimingCurrentTime(ctx->core->timing);
+	ctx->start_cycle = mTimingCurrentTime(ctx->core->timing);
+	ctx->running_frame = true;
+
 	mDebuggerRunFrame(&ctx->debugger);
 
 	blit(vbuff, ctx->vbuff, ctx->palette);
@@ -531,7 +535,10 @@ EXP bool BizAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* nsamp
 		*nsamp = maxSamples;
 	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
 
-	*cycles = mTimingCurrentTime(ctx->core->timing) - start_cycle;
+	int32_t end_cycle = mTimingCurrentTime(ctx->core->timing);
+	*cycles = end_cycle - ctx->start_cycle;
+	ctx->running_frame = false;
+
 	return ctx->lagged;
 }
 
@@ -553,7 +560,9 @@ EXP bool BizSubAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* ns
 	ctx->sub_event_passed = false;
 	mTimingSchedule(ctx->core->timing, &ctx->subevent, *cycles);
 
-	int32_t start_cycle = mTimingCurrentTime(ctx->core->timing);
+	ctx->start_cycle = mTimingCurrentTime(ctx->core->timing);
+	ctx->running_frame = true;
+
 	uint32_t start_frame = ctx->core->frameCounter(ctx->core);
 	while (!ctx->sub_event_passed)
 	{
@@ -572,7 +581,10 @@ EXP bool BizSubAdvance(bizctx* ctx, uint16_t keys, uint32_t* vbuff, uint32_t* ns
 		*nsamp = maxSamples;
 	mAudioBufferRead(&ctx->abuf, sbuff, maxSamples);
 
-	*cycles = mTimingCurrentTime(ctx->core->timing) - start_cycle;
+	int32_t end_cycle = mTimingCurrentTime(ctx->core->timing);
+	*cycles = end_cycle - ctx->start_cycle;
+	ctx->running_frame = false;
+
 	return ctx->lagged;
 }
 
@@ -696,6 +708,16 @@ EXP void BizSetRegister(bizctx* ctx, int32_t index, int32_t value)
 	{
 		memcpy(&ctx->gba->cpu->spsr, &value, sizeof(int32_t));
 	}
+}
+
+EXP int32_t BizGetCallbackCycleOffset(bizctx* ctx)
+{
+	if (!ctx->running_frame)
+	{
+		return 0;
+	}
+
+	return mTimingCurrentTime(ctx->core->timing) - ctx->start_cycle;
 }
 
 EXP void BizWriteBus(bizctx* ctx, uint32_t addr, uint8_t val)
