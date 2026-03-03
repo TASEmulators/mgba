@@ -218,7 +218,11 @@ void exec_hook(struct mDebuggerModule* module)
 		ctx->trace_callback(trace);
 	}
 	if (ctx->exec_callback)
-		ctx->exec_callback(_ARMPCAddress(ctx->core->cpu));
+	{
+		// It seems that the PC is actually only 1 instruction ahead within the hook (as it's in the middle of an instruction?)
+		// As such, _ARMPCAddress overcorrects the PC by one instruction, so we need to correct it back
+		ctx->exec_callback(_ARMPCAddress(ctx->core->cpu) + _ARMInstructionLength(ctx->core->cpu));
+	}
 }
 
 EXP void BizSetInputCallback(bizctx* ctx, void(*callback)(void))
